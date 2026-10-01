@@ -44,6 +44,8 @@ internal sealed class AboutForm : Form
     private readonly System.Windows.Forms.Timer _fade = new() { Interval = 50 };
     private readonly Label _credit;
     private readonly LinkLabel _ackLink;
+    private readonly LinkLabel _gitLink;
+    private const string GitHubUrl = "https://github.com/mstrjk/Utagoe4";
     private readonly Panel _ackPanel;
     private readonly BitBtn _ok;
     private readonly PictureBox _logo;
@@ -106,6 +108,20 @@ internal sealed class AboutForm : Form
         };
         _ackLink.LinkClicked += (_, _) => { _expanded = !_expanded; Relayout(); };
 
+        _gitLink = new LinkLabel
+        {
+            Text = "GitHub: github.com/mstrjk/Utagoe4",
+            AutoSize = true,
+            BackColor = Color.Transparent,
+            LinkColor = HelpLinks.LinkColor,
+            ActiveLinkColor = HelpLinks.LinkColor,
+            VisitedLinkColor = HelpLinks.LinkColor,
+            LinkBehavior = LinkBehavior.AlwaysUnderline,
+            TabIndex = 4,
+        };
+        _gitLink.LinkArea = new LinkArea(8, _gitLink.Text.Length - 8);
+        _gitLink.LinkClicked += (_, _) => Open(GitHubUrl);
+
         _ackPanel = new Panel { AutoScroll = true, Visible = false, BackColor = Color.Transparent, TabIndex = 2 };
 
         _ok = new BitBtn { Bounds = new Rectangle(88, 208, 75, 25), TabIndex = 0 };
@@ -137,7 +153,7 @@ internal sealed class AboutForm : Form
             if (_lang.SelectedIndex >= 0) languageChosen(L.Languages[_lang.SelectedIndex].Code);
         };
 
-        Controls.AddRange(new Control[] { _ok, _logo, _ver, _credit, _iconCaption, _langCaption, _lang, _ackLink, _ackPanel });
+        Controls.AddRange(new Control[] { _ok, _logo, _ver, _credit, _gitLink, _iconCaption, _langCaption, _lang, _ackLink, _ackPanel });
         Theme.Changed += SwapLogo;
         L.Changed += Retranslate;
         Disposed += (_, _) => { Theme.Changed -= SwapLogo; L.Changed -= Retranslate; };
@@ -185,7 +201,8 @@ internal sealed class AboutForm : Form
         _ver.Location = new Point(_logo.Right - _ver.PreferredSize.Width, _logo.Bottom + S(2));
         _credit.SetBounds(left, _ver.Bottom + S(8), width, text.Height);
 
-        _iconCaption.Location = new Point(left, _credit.Bottom + S(10));
+        _gitLink.Location = new Point(left, _credit.Bottom + S(6));
+        _iconCaption.Location = new Point(left, _gitLink.Bottom + S(10));
         int cell = Math.Min(S(26), (width - S(2) * (_iconChoices.Count - 1)) / _iconChoices.Count);
         int iconsTop = _iconCaption.Bottom + S(3);
         for (int i = 0; i < _iconChoices.Count; i++)
