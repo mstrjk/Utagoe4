@@ -365,7 +365,7 @@ internal static class Core
 
     public static bool CheckSpans(string text, out string error)
     {
-        var buf = new byte[256];
+        var buf = new byte[4096];
         int rc = CheckSpansRaw(text, buf, buf.Length);
         error = rc == 0 ? "" : CString(buf);
         return rc == 0;
@@ -409,7 +409,7 @@ internal static class Core
 
     public static bool TryProbeAudio(string path, out CoreAudioInfo info, out string error)
     {
-        var buf = new byte[256];
+        var buf = new byte[4096];
         int rc = ProbeAudioRaw(path, out info, buf, buf.Length);
         error = rc == 0 ? "" : CString(buf);
         return rc == 0;
@@ -443,7 +443,7 @@ internal static class Core
     public static bool TranscodeFile(string input, string output, OutputFormat format, OutputDepth depth,
                                      int bitrateKbps, out string error)
     {
-        var buf = new byte[512];
+        var buf = new byte[4096];
         int rc = TranscodeFileRaw(input, output, (int)format, (int)depth, bitrateKbps, buf, buf.Length);
         error = rc == 0 ? "" : CString(buf);
         return rc == 0;
@@ -456,7 +456,7 @@ internal static class Core
     {
         // native call 中に delegate が GC されないよう、call 完了まで参照を保持する。
         ProgressCallback? cb = progress == null ? null : (f, _) => progress(f) ? 1 : 0;
-        var buf = new byte[512];
+        var buf = new byte[4096];
         int rc = ExtractFileRaw(original, instrumental, output, settings, cb, IntPtr.Zero,
                                 out result, buf, buf.Length);
         GC.KeepAlive(cb);

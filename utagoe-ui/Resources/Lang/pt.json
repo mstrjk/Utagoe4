@@ -220,5 +220,7 @@
  "Utagoe Terminal": "Terminal do Utagoe",
  "Type 'help' for commands.": "Digite 'help' para ver os comandos.",
  "Setting up Utagoe": "Configurando o Utagoe",
- "One-time setup, no admin rights needed.": "Instalação única, sem permissão de administrador."
+ "One-time setup, no admin rights needed.": "Instalação única, sem permissão de administrador.",
+ "Yes": "Sim",
+ "No": "Não"
 }

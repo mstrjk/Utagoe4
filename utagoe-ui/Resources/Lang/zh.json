@@ -220,5 +220,7 @@
  "Utagoe Terminal": "Utagoe 终端",
  "Type 'help' for commands.": "输入 'help' 查看命令。",
  "Setting up Utagoe": "正在安装 Utagoe",
- "One-time setup, no admin rights needed.": "一次性安装，无需管理员权限。"
+ "One-time setup, no admin rights needed.": "一次性安装，无需管理员权限。",
+ "Yes": "是",
+ "No": "否"
 }

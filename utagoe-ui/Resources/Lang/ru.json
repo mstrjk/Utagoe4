@@ -220,5 +220,7 @@
  "Utagoe Terminal": "Терминал Utagoe",
  "Type 'help' for commands.": "Введите 'help', чтобы увидеть команды.",
  "Setting up Utagoe": "Установка Utagoe",
- "One-time setup, no admin rights needed.": "Однократная установка, права администратора не нужны."
+ "One-time setup, no admin rights needed.": "Однократная установка, права администратора не нужны.",
+ "Yes": "Да",
+ "No": "Нет"
 }

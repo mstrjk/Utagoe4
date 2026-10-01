@@ -14,11 +14,7 @@ namespace utagoe {
 // UTF-8 path を wide 文字列へ。Windows の各 API は wide path で開く。
 inline std::wstring widenPath(const std::string& s) {
 #ifdef _WIN32
-    if (s.empty()) return std::wstring();
-    const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    std::wstring w(static_cast<std::size_t>(n), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), &w[0], n);
-    return w;
+    return longPath(widenUtf8(s));
 #else
     return std::wstring(s.begin(), s.end());
 #endif

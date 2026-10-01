@@ -45,7 +45,7 @@ internal static class Program
             catch (Exception ex)
             {
                 LogHub.Exception("Utagoe could not repair its components", ex);
-                MessageBox.Show($"Utagoe could not repair its components:\n\n{ex.Message}", Messages.Title,
+                Utagoe.Forms.MessageForm.Show($"Utagoe could not repair its components:\n\n{ex.Message}", Messages.Title,
                                 MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
@@ -62,7 +62,7 @@ internal static class Program
         if (!Core.IsAvailable)
         {
             LogHub.Add(LogKind.Error, 0, $"utagoe_core.dll could not be loaded from {lib}");
-            MessageBox.Show(
+            Utagoe.Forms.MessageForm.Show(
                 "Utagoe's processing core could not be loaded.\n\n" +
                 "Run the downloaded Utagoe.exe again to repair the installation.",
                 Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -94,7 +94,7 @@ internal static class Program
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
-            MessageBox.Show($"Utagoe could not be started from {exe}:\n\n{ex.Message}", Messages.Title,
+            Utagoe.Forms.MessageForm.Show($"Utagoe could not be started from {exe}:\n\n{ex.Message}", Messages.Title,
                             MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
@@ -132,7 +132,7 @@ internal static class Program
         }
         catch (Exception io) when (io is IOException or UnauthorizedAccessException) { }
         if (fatal) return;
-        MessageBox.Show($"{what}:\n\n{ex.GetType().Name}: {ex.Message}{Messages.SeeTerminal}", Messages.Title,
+        Utagoe.Forms.MessageForm.Show($"{what}:\n\n{ex.GetType().Name}: {ex.Message}{Messages.SeeTerminal}", Messages.Title,
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 }

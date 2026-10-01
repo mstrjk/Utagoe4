@@ -7,6 +7,15 @@ namespace Utagoe.App;
 
 internal static class FileNaming
 {
+    public static string Clean(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return path;
+        path = path.Trim().Trim('"');
+        if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase)) return @"\\" + path[8..];
+        if (path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal)) return path[4..];
+        return path;
+    }
+
     /// インスト版を示す keyword 群。
     /// 英語版バイナリでは翻訳時に一部の日本語 keyword が同じ byte 長の英語で上書きされている。
     /// 欠けた元語は full-width の「インスト」「カラオケ」「オフボーカル」「オフヴォーカル」と判断できるため、英語語彙と一緒に復元している。

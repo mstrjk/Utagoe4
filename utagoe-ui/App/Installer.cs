@@ -215,7 +215,7 @@ internal static class Installer
     public static int UninstallInteractive()
     {
         string root = AppPaths.InstallRoot;
-        var answer = MessageBox.Show(
+        var answer = Utagoe.Forms.MessageForm.Show(
             L.F("Remove Utagoe from this PC?\n\n{0}\n\nYour settings in {1} are kept.", root, AppSettings.Folder),
             Messages.Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
         if (answer != DialogResult.Yes) return 1;
@@ -240,12 +240,12 @@ internal static class Installer
                 UseShellExecute = false,
                 WindowStyle = ProcessWindowStyle.Hidden,
             });
-            MessageBox.Show(L.T("Utagoe has been removed."), Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Utagoe.Forms.MessageForm.Show(L.T("Utagoe has been removed."), Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return 0;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            MessageBox.Show(L.F("Utagoe could not be removed completely:\n\n{0}\n\nClose every Utagoe window and try again.", ex.Message),
+            Utagoe.Forms.MessageForm.Show(L.F("Utagoe could not be removed completely:\n\n{0}\n\nClose every Utagoe window and try again.", ex.Message),
                             Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return 2;
         }

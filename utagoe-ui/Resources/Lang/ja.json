@@ -220,5 +220,7 @@
  "Utagoe Terminal": "Utagoe ターミナル",
  "Type 'help' for commands.": "コマンド一覧は 'help' と入力してください。",
  "Setting up Utagoe": "Utagoeをセットアップしています",
- "One-time setup, no admin rights needed.": "初回のみのセットアップです。管理者権限は不要です。"
+ "One-time setup, no admin rights needed.": "初回のみのセットアップです。管理者権限は不要です。",
+ "Yes": "はい",
+ "No": "いいえ"
 }

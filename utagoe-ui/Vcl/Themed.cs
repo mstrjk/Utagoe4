@@ -26,6 +26,7 @@ internal class ThemedLabel : Label
             return;
         }
         var flags = Flags(TextAlign, false) | TextFormatFlags.TextBoxControl;
+        if (!UseMnemonic) flags |= TextFormatFlags.NoPrefix;
         if (AutoEllipsis && _bar is not { Visible: true }) flags |= TextFormatFlags.EndEllipsis;
         int width = TextWidth;
         int offset = _bar is { Visible: true } ? _bar.Value : 0;
@@ -43,7 +44,7 @@ internal class ThemedLabel : Label
         if (_bar != null) _bar.Visible = false;
         if (AutoSize) { Invalidate(); return; }
         if (string.IsNullOrEmpty(Text) || ClientSize.Width <= 0 || ClientSize.Height <= 0) { Invalidate(); return; }
-        var flags = TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl;
+        var flags = TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | (UseMnemonic ? 0 : TextFormatFlags.NoPrefix);
         int Measure(Font f, int w) => TextRenderer.MeasureText(Text, f, new Size(w, int.MaxValue), flags).Height;
         _need = Measure(Font, ClientSize.Width);
         if (_need > ClientSize.Height)

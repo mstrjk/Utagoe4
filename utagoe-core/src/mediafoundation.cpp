@@ -32,6 +32,8 @@ struct MfApi {
     decltype(&::MFCreateSample) CreateSample = nullptr;
     decltype(&::MFCreateSourceReaderFromURL) CreateSourceReaderFromURL = nullptr;
     decltype(&::MFCreateSinkWriterFromURL) CreateSinkWriterFromURL = nullptr;
+    decltype(&::MFCreateSourceReaderFromByteStream) CreateSourceReaderFromByteStream = nullptr;
+    decltype(&::MFCreateFile) CreateFile = nullptr;
     decltype(&::MFTranscodeGetAudioOutputAvailableTypes) TranscodeGetAudioOutputAvailableTypes = nullptr;
     bool ok = false;
 
@@ -50,6 +52,8 @@ struct MfApi {
              get(plat, "MFCreateMemoryBuffer", CreateMemoryBuffer) && get(plat, "MFCreateSample", CreateSample) &&
              get(rw, "MFCreateSourceReaderFromURL", CreateSourceReaderFromURL) &&
              get(rw, "MFCreateSinkWriterFromURL", CreateSinkWriterFromURL) &&
+             get(rw, "MFCreateSourceReaderFromByteStream", CreateSourceReaderFromByteStream) &&
+             get(plat, "MFCreateFile", CreateFile) &&
              get(mf, "MFTranscodeGetAudioOutputAvailableTypes", TranscodeGetAudioOutputAvailableTypes);
     }
 };
@@ -127,7 +131,14 @@ bool mfDecode(const std::string& path, AudioBuffer* out, AudioInfo& info, std::s
 
     ComPtr<IMFSourceReader> reader;
     const std::wstring wpath = widenPath(path);
-    HRESULT h = api().CreateSourceReaderFromURL(wpath.c_str(), nullptr, &reader);
+    HRESULT h;
+    if (isLongPath(wpath)) {
+        ComPtr<IMFByteStream> stream;
+        h = api().CreateFile(MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST, MF_FILEFLAGS_NONE, wpath.c_str(), &stream);
+        if (SUCCEEDED(h)) h = api().CreateSourceReaderFromByteStream(stream.get(), nullptr, &reader);
+    } else {
+        h = api().CreateSourceReaderFromURL(wpath.c_str(), nullptr, &reader);
+    }
     if (FAILED(h)) { error = "unsupported or unreadable audio file"; return false; }
 
     const DWORD stream = static_cast<DWORD>(MF_SOURCE_READER_FIRST_AUDIO_STREAM);
@@ -324,7 +335,14 @@ bool mfEncode(const std::string& path, const AudioBuffer& inAudio, OutputFormat 
 
     ComPtr<IMFSinkWriter> writer;
     const std::wstring wpath = widenPath(path);
-    HRESULT h = api().CreateSinkWriterFromURL(wpath.c_str(), nullptr, attrs.get(), &writer);
+    HRESULT h;
+    if (isLongPath(wpath)) {
+        ComPtr<IMFByteStream> stream;
+        h = api().CreateFile(MF_ACCESSMODE_WRITE, MF_OPENMODE_DELETE_IF_EXIST, MF_FILEFLAGS_NONE, wpath.c_str(), &stream);
+        if (SUCCEEDED(h)) h = api().CreateSinkWriterFromURL(nullptr, stream.get(), attrs.get(), &writer);
+    } else {
+        h = api().CreateSinkWriterFromURL(wpath.c_str(), nullptr, attrs.get(), &writer);
+    }
     if (FAILED(h)) { error = hr("cannot create the output file", h); return false; }
 
     DWORD streamIndex = 0;

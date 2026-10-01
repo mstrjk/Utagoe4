@@ -46,7 +46,7 @@ internal sealed partial class MainForm : Form
         BitBtn3.Click += BitBtn3Click;
         PlayBtn1.Click += (_, _) => Play(Edit1.Text);
         PlayBtn2.Click += (_, _) => Play(Edit2.Text);
-        Edit3.Text = OutputFolder;
+        Edit3.Text = FileNaming.Clean(OutputFolder);
         Edit3.Leave += (_, _) => RememberFolder(Edit3.Text.Trim());
 
         // DFM 上では Edit1 / Edit3 が同じ KeyPress handler、Edit2 は別 handler。
@@ -92,8 +92,8 @@ internal sealed partial class MainForm : Form
             InitialDirectory = Directory.Exists(Edit3.Text.Trim()) ? Edit3.Text.Trim() : OutputFolder,
         };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        Edit3.Text = dlg.SelectedPath;
-        RememberFolder(dlg.SelectedPath);
+        Edit3.Text = FileNaming.Clean(dlg.SelectedPath);
+        RememberFolder(Edit3.Text);
     }
 
     /// 設定に覚えている出力先。未設定なら Music\Utagoe。
@@ -132,6 +132,7 @@ internal sealed partial class MainForm : Form
     /// original を設定したら Misc 設定に応じて matching instrumental 検索と output 自動命名も走らせる。
     private void SetOriginal(string path)
     {
+        path = FileNaming.Clean(path);
         Edit1.Text = path;
         WformLbl1.Text = DescribeAudio(path);
 
@@ -144,6 +145,7 @@ internal sealed partial class MainForm : Form
 
     private void SetInstrumental(string path)
     {
+        path = FileNaming.Clean(path);
         Edit2.Text = path;
         WformLbl2.Text = DescribeAudio(path);
     }
@@ -180,7 +182,7 @@ internal sealed partial class MainForm : Form
     private void OnDragDrop(object? sender, DragEventArgs e)
     {
         if (e.Data?.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } files) return;
-        string file = files[0];
+        string file = FileNaming.Clean(files[0]);
         // 欄の境目は scaling / 拡大に合わせて、各見出しの位置で決める。
         int y = PointToClient(new Point(e.X, e.Y)).Y;
 
@@ -196,7 +198,7 @@ internal sealed partial class MainForm : Form
 
         if (!IsAudioFile(file))
         {
-            MessageBox.Show(this, Messages.DropWave, Messages.Title,
+            Utagoe.Forms.MessageForm.Show(this, Messages.DropWave, Messages.Title,
                             MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
@@ -221,9 +223,9 @@ internal sealed partial class MainForm : Form
             return;
         }
 
-        string original = Edit1.Text.Trim();
-        string instrumental = Edit2.Text.Trim();
-        string folder = Edit3.Text.Trim();
+        string original = FileNaming.Clean(Edit1.Text);
+        string instrumental = FileNaming.Clean(Edit2.Text);
+        string folder = FileNaming.Clean(Edit3.Text);
 
         if (!ValidateInputs(original, instrumental, folder, out string output)) return;
         await NoticeGpuOnce();
@@ -302,7 +304,7 @@ internal sealed partial class MainForm : Form
         else
         {
             ProgBar1.Value = 0;
-            MessageBox.Show(this, (rc == 6 ? $"{Messages.FileCreateError}\n\n{error}" : error) + Messages.SeeTerminal,
+            Utagoe.Forms.MessageForm.Show(this, (rc == 6 ? $"{Messages.FileCreateError}\n\n{error}" : error) + Messages.SeeTerminal,
                             Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
@@ -364,7 +366,7 @@ internal sealed partial class MainForm : Form
 
         bool Fail(string msg)
         {
-            MessageBox.Show(this, msg, Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Utagoe.Forms.MessageForm.Show(this, msg, Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return false;
         }
     }
@@ -411,7 +413,7 @@ internal sealed partial class MainForm : Form
     }
 
     private bool ConfirmHalt() =>
-        MessageBox.Show(this, Messages.HaltProcess, Messages.Title,
+        Utagoe.Forms.MessageForm.Show(this, Messages.HaltProcess, Messages.Title,
                         MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
 
     /// debug mode では output 横に .txt を書く。元実装の中身は未追跡なので alignment debug line のみ出す。
@@ -450,7 +452,7 @@ internal sealed partial class MainForm : Form
     private void DbgPanelDblClick(object? sender, EventArgs e)
     {
         _debugMode = !_debugMode;
-        MessageBox.Show(this, Messages.DebugModeIs + (_debugMode ? "ON" : "OFF"), Messages.Title,
+        Utagoe.Forms.MessageForm.Show(this, Messages.DebugModeIs + (_debugMode ? "ON" : "OFF"), Messages.Title,
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 }

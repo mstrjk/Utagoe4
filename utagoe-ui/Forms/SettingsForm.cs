@@ -228,7 +228,7 @@ internal sealed partial class SettingsForm : Form
     {
         if (!Core.CheckSpans(SpansEdit.Text.Trim(), out string error))
         {
-            MessageBox.Show(this, Messages.BadSpans(error), Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Utagoe.Forms.MessageForm.Show(this, Messages.BadSpans(error), Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             PageControl.SelectedIndex = 3;
             SpansEdit.Focus();
             return;

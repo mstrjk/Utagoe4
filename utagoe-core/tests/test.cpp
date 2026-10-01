@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <windows.h>
 
 using namespace utagoe;
 namespace fs = std::filesystem;
@@ -1375,6 +1376,59 @@ void testCenterSides() {
     fs::remove(fs::u8path(path));
 }
 
+void testLongPaths() {
+    say("Paths longer than 260 characters\n");
+    fs::path dir = fs::u8path(tempPath("long"));
+    while (dir.u8string().size() < 300) dir /= fs::u8path(u8"Taylor Swift - Taylor Swift Karaoke (Instrumentals) [2006] 歌声");
+    std::error_code ec;
+    fs::create_directories(fs::u8path(tempPath("long")), ec);
+    bool made = true;
+    {
+        std::wstring cur = L"\\\\?\\" + fs::u8path(tempPath("long")).wstring();
+        const std::wstring full = dir.wstring();
+        std::wstring rest = full.substr(fs::u8path(tempPath("long")).wstring().size());
+        std::size_t at = 0;
+        while (at < rest.size()) {
+            std::size_t next = rest.find_first_of(L"\\/", at + 1);
+            if (next == std::wstring::npos) next = rest.size();
+            std::wstring part = rest.substr(at, next - at);
+            while (!part.empty() && (part[0] == L'\\' || part[0] == L'/')) part.erase(0, 1);
+            if (!part.empty()) {
+                cur += L"\\" + part;
+                if (!CreateDirectoryW(cur.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) made = false;
+            }
+            at = next;
+        }
+    }
+    check(made, "deep folder created");
+    const AudioBuffer src = testSignal(44100, 2, 16);
+    struct Case { const char* name; const char* file; OutputFormat f; };
+    const Case cases[] = {
+        {"WAV at a long path", "10. Mary's Song (Oh My My My) [Instrumental].wav", OutputFormat::Wav},
+        {"FLAC at a long path", "10. Mary's Song (Oh My My My) [Instrumental].flac", OutputFormat::Flac},
+        {"AAC .m4a at a long path", "10. Mary's Song (Oh My My My) [Instrumental].m4a", OutputFormat::Aac},
+    };
+    for (const auto& c : cases) {
+        const std::string path = (dir / fs::u8path(c.file)).u8string();
+        std::string err;
+        EncodeOptions opt;
+        opt.format = c.f;
+        opt.depth = OutputDepth::Int16;
+        if (!encodeAudio(path, src, opt, err)) {
+            if (mfMissing(err)) { skip(c.name, err); continue; }
+            say("    %u chars, encode error: %s\n", static_cast<unsigned>(path.size()), err.c_str());
+            check(false, c.name);
+            continue;
+        }
+        AudioBuffer back;
+        AudioInfo info;
+        const bool ok = decodeAudio(path, back, &info, err);
+        if (!ok) say("    %u chars, decode error: %s\n", static_cast<unsigned>(path.size()), err.c_str());
+        check(ok && back.frames() > src.frames() / 2 && back.channels == 2, c.name);
+    }
+    _wsystem((L"cmd /c rmdir /s /q \"\\\\?\\" + fs::u8path(tempPath("long")).wstring() + L"\"").c_str());
+}
+
 int runAll() {
     failures = 0;
     testFft();
@@ -1393,6 +1447,7 @@ int runAll() {
     testLegacyBitExact();
     testResampler();
     testLosslessRoundTrips();
+    testLongPaths();
     testLossyRoundTrips();
     testMismatchedInputs();
     testMixedCodecFiles();
