@@ -1,0 +1,25 @@
+# build 生成物。ローカルの絶対 path を含むので追跡しない。
+bin/
+obj/
+utagoe-core/build/
+.vs/
+*.user
+
+*.md
+!/README.md
+utagoe-core/tests/*_dump.py
+utagoe-core/tests/*_parity.cpp
+COMMENTS*.txt
+utagoe-ui/Reference/
+
+# 元実装のバイナリ (英語版)。再配布もしない。
+Utagoe-v3-full_en.exe
+
+# 同梱ライブラリの source は deps.ps1 が版と SHA-256 を固定して取得する。Git には入れない。
+third_party/
+.deps-cache/
+
+dist/
+
+# 例外: 移植元などの license 文書は英語でも必ず残す。
+!licenses/**/LICENSE*

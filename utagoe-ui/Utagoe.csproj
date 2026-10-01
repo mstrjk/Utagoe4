@@ -1,0 +1,78 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- 配布物にビルド環境の絶対 path を残さない。source と pdb の path は project 相対になる。 -->
+    <Deterministic>true</Deterministic>
+    <EnableSourceLink>false</EnableSourceLink>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..'))=.</PathMap>
+
+    <!-- utagoe_core.dll は MinGW-w64 で 64-bit DLL として build する。 -->
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+
+    <AssemblyName>Utagoe</AssemblyName>
+    <RootNamespace>Utagoe</RootNamespace>
+    <Version>4.0</Version>
+    <Product>Utagoe</Product>
+    <ApplicationIcon>Resources/Utagoe.ico</ApplicationIcon>
+    <Description>Vocal extraction by instrumental subtraction</Description>
+  </PropertyGroup>
+
+  <!-- 配布する本体は .NET を同梱しない (framework-dependent。同梱すると trim しても 25 MB 以上になる)。
+       .NET Desktop Runtime が無い PC では、配布用 setup (utagoe-core\setup) が Microsoft から取ってきて入れる。
+       新しい major 版の .NET しか無い PC でも動くようにする。 -->
+  <PropertyGroup>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <!-- UI は英語だけなので、WinForms の他言語の resource は入れない。 -->
+  <PropertyGroup>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- Utagoe-v3-full_en.exe から復元した bitmap。DFM の glyph data と .rsrc の VCL BitBtn glyph をそのまま保持している。
+       元の byte data を変えないため .bmp のまま保存し、VCL の transparency と 2-state 分割は
+       runtime に VclGlyph 側で処理する。 -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\*.bmp" LogicalName="Utagoe.Resources.%(Filename).bmp" />
+    <EmbeddedResource Include="Resources\Utagoe.ico" LogicalName="Utagoe.Resources.Utagoe.ico" />
+    <!-- v4: About で選べる app icon の色違い (32-bit BMP、alpha 付き)。AppIcons が読む。 -->
+    <EmbeddedResource Include="Resources\Icons\*.bmp" LogicalName="Utagoe.Resources.Icons.%(Filename).bmp" />
+    <EmbeddedResource Include="Resources\Logos\*.bmp" LogicalName="Utagoe.Resources.Logos.%(Filename).bmp" />
+  </ItemGroup>
+
+  <!-- native DLL (utagoe_core.dll と同梱ライブラリの utagoe-*.dll)。先に build.ps1 で utagoe-core を build する。
+       exe に埋め込み (初回起動時に %LOCALAPPDATA%\Utagoe\lib\ へ展開する)、開発用の build では出力先の lib\ にも置く。 -->
+  <ItemGroup Condition="Exists('..\utagoe-core\build\utagoe_core.dll')">
+    <NativePayload Include="..\utagoe-core\build\utagoe_core.dll;..\utagoe-core\build\utagoe-*.dll" />
+    <EmbeddedResource Include="@(NativePayload)" LogicalName="payload/lib/%(Filename)%(Extension)" />
+    <None Include="@(NativePayload)" Link="lib\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+  <!-- 同梱ライブラリと移植元の license 文書。BSD / MIT 系 license は binary 配布時に notice の同梱を求める。
+       third_party\ は deps.ps1 が取得する。exe に埋め込み、導入先の licenses\ に展開する。 -->
+  <ItemGroup>
+    <LicenseFile Include="..\third_party\*\COPYING*;..\third_party\*\AUTHORS;..\third_party\*\LICENSE*" />
+    <LicenseFile Include="..\licenses\**\LICENSE*" />
+    <EmbeddedResource Include="@(LicenseFile)" LogicalName="payload/licenses/%(RecursiveDir)%(Filename)%(Extension)" />
+    <None Include="@(LicenseFile)" Link="licenses\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+
+  <Target Name="WarnMissingCore" BeforeTargets="Build"
+          Condition="!Exists('..\utagoe-core\build\utagoe_core.dll')">
+    <Warning Text="utagoe_core.dll not found. Run build.ps1 first; the UI will start but cannot process audio." />
+  </Target>
+
+</Project>

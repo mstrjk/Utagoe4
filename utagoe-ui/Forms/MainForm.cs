@@ -1,0 +1,456 @@
+// 元実装の main window の挙動を再現する。
+// handler 名は RTTI から復元した名前を維持し、NOTES.md と突き合わせやすくしている。
+
+using System.Diagnostics;
+using Utagoe.App;
+using Utagoe.Native;
+using Utagoe.Vcl;
+
+namespace Utagoe.Forms;
+
+internal sealed partial class MainForm : Form
+{
+    private readonly AppSettings _settings;
+    private bool _debugMode;
+
+    private CancellationTokenSource? _cancel;
+    private bool _closeWhenIdle;
+    private int _elapsed;
+
+    private bool IsRunning => _cancel != null;
+
+    // 「GPU が使えない」通知はこの起動中に一度だけ出す。
+    private bool _gpuNoticeShown;
+
+    public MainForm(AppSettings settings)
+    {
+        _settings = settings;
+        InitializeComponent();
+        Icon = VclGlyph.AppIcon;
+
+        // TBevel は windowed control の下で form surface に直接描く。VCL と同じ重なり順にする。
+        BevelPainter.Attach(this,
+            new Bevel(8, 8, 553, 257),
+            new Bevel(16, 168, 433, 9, BevelShape.TopLine),
+            new Bevel(456, 16, 9, 241, BevelShape.LeftLine),
+            new Bevel(458, 270, 103, 17));
+        VclScaling.Apply(this);
+        InitPanels();
+        Theme.Paint(this);
+
+        // GPU の初期化には時間がかかることがあるので、起動直後に裏で済ませておく。
+        if (_settings.Values.UseGpu != 0) _ = Task.Run(() => Core.Gpu);
+
+        BitBtn1.Click += (_, _) => BrowseInput(Edit1, isOriginal: true);
+        BitBtn2.Click += (_, _) => BrowseInput(Edit2, isOriginal: false);
+        BitBtn3.Click += BitBtn3Click;
+        PlayBtn1.Click += (_, _) => Play(Edit1.Text);
+        PlayBtn2.Click += (_, _) => Play(Edit2.Text);
+        Edit3.Text = OutputFolder;
+        Edit3.Leave += (_, _) => RememberFolder(Edit3.Text.Trim());
+
+        // DFM 上では Edit1 / Edit3 が同じ KeyPress handler、Edit2 は別 handler。
+        Edit1.KeyPress += Edit1KeyPress;
+        Edit3.KeyPress += Edit1KeyPress;
+        Edit2.KeyPress += Edit2KeyPress;
+
+        StartBtn.Click += StartBtnClick;
+        SetBitBtn.Click += SetBitBtnClick;
+        HelpBtn.Click += HelpBtnClick;
+        AboutBtn.Click += (_, _) => ShowAbout();
+        CloseBtn.Click += (_, _) => Close();
+        DbgPanel.DoubleClick += DbgPanelDblClick;
+        ElapsedTimer.Tick += (_, _) => InfoLabel.Text = Messages.Elapsed(++_elapsed);
+
+        foreach (Control c in new Control[] { this, Edit1, Edit2, Edit3 })
+        {
+            c.DragEnter += OnDragEnter;
+            c.DragDrop += OnDragDrop;
+        }
+        ApplyOutputKind();
+        L.Changed += () => _infoPane?.ShowText(Messages.Welcome);
+    }
+
+    private void BrowseInput(TextBox target, bool isOriginal)
+    {
+        using var dlg = new OpenFileDialog { Filter = Messages.OpenFilter };
+        SeedDialog(dlg, target.Text);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        if (isOriginal) SetOriginal(dlg.FileName);
+        else SetInstrumental(dlg.FileName);
+    }
+
+    // v4: 出力は folder を選ぶ。形式は Settings の Output で決める。
+    private void BitBtn3Click(object? sender, EventArgs e)
+    {
+        using var dlg = new FolderBrowserDialog
+        {
+            Description = Messages.ChooseFolder,
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = true,
+            InitialDirectory = Directory.Exists(Edit3.Text.Trim()) ? Edit3.Text.Trim() : OutputFolder,
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        Edit3.Text = dlg.SelectedPath;
+        RememberFolder(dlg.SelectedPath);
+    }
+
+    /// 設定に覚えている出力先。未設定なら Music\Utagoe。
+    private string OutputFolder =>
+        _settings.Values.OutputFolder is { Length: > 0 } f ? f : AppPaths.DefaultOutputFolder;
+
+    private void RememberFolder(string folder)
+    {
+        if (folder.Length == 0 || folder == _settings.Values.OutputFolder) return;
+        _settings.Values.OutputFolder = folder;
+        _settings.Save();
+    }
+
+    /// 原曲から出力 file の path を作る。名前は原曲の名前 (+ 自動命名の文字)、拡張子は出力形式のもの。
+    private string OutputFileFor(string original, string folder)
+    {
+        string suffix = _settings.Values.OutputKind == 1 ? Messages.PairSuffix
+                      : _settings.Values.OutputKind == 2 ? ""
+                      : _settings.Values.AutoNameOutput != 0 ? _settings.Values.OutputSuffix : "";
+        string name = Path.GetFileName(FileNaming.AutoOutputName(original, suffix,
+                                       Core.FormatExtension((OutputFormat)_settings.Values.OutputFormat)));
+        return Path.Combine(folder, name);
+    }
+
+    private static void SeedDialog(FileDialog dlg, string current)
+    {
+        if (string.IsNullOrWhiteSpace(current)) return;
+        try
+        {
+            dlg.InitialDirectory = Path.GetDirectoryName(current) ?? "";
+            dlg.FileName = Path.GetFileName(current);
+        }
+        catch (ArgumentException) { /* 手入力で壊れた path は無視する。 */ }
+    }
+
+    /// original を設定したら Misc 設定に応じて matching instrumental 検索と output 自動命名も走らせる。
+    private void SetOriginal(string path)
+    {
+        Edit1.Text = path;
+        WformLbl1.Text = DescribeAudio(path);
+
+        if (_settings.Values.SearchInstFile != 0)
+        {
+            string? inst = FileNaming.FindInstrumental(path);
+            if (inst != null) SetInstrumental(inst);
+        }
+    }
+
+    private void SetInstrumental(string path)
+    {
+        Edit2.Text = path;
+        WformLbl2.Text = DescribeAudio(path);
+    }
+
+    private static string DescribeAudio(string path) =>
+        Core.TryProbeAudio(path, out var info, out _) ? Messages.AudioFormat(info) : "";
+
+    private static bool IsAudioFile(string path) =>
+        Messages.AudioExtensions.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+
+    // path box で Enter を押すと browse 済みと同じ扱いで確定する。
+    private void Edit1KeyPress(object? sender, KeyPressEventArgs e)
+    {
+        if (e.KeyChar != (char)Keys.Enter) return;
+        e.Handled = true;
+        if (sender == Edit1) SetOriginal(Edit1.Text.Trim());
+    }
+
+    private void Edit2KeyPress(object? sender, KeyPressEventArgs e)
+    {
+        if (e.KeyChar != (char)Keys.Enter) return;
+        e.Handled = true;
+        SetInstrumental(Edit2.Text.Trim());
+    }
+
+    // drag&drop は window 全体で受け、drop 座標からどの欄へ入れるか決める。
+
+    private void OnDragEnter(object? sender, DragEventArgs e)
+    {
+        e.Effect = !IsRunning && e.Data?.GetDataPresent(DataFormats.FileDrop) == true
+            ? DragDropEffects.Copy : DragDropEffects.None;
+    }
+
+    private void OnDragDrop(object? sender, DragEventArgs e)
+    {
+        if (e.Data?.GetData(DataFormats.FileDrop) is not string[] { Length: > 0 } files) return;
+        string file = files[0];
+        // 欄の境目は scaling / 拡大に合わせて、各見出しの位置で決める。
+        int y = PointToClient(new Point(e.X, e.Y)).Y;
+
+        // 出力欄には folder を入れる。file を落としたらその file のある folder。
+        if (y >= Label3.Top - Label3.Height)
+        {
+            string folder = Directory.Exists(file) ? file : Path.GetDirectoryName(file) ?? "";
+            if (folder.Length == 0) return;
+            Edit3.Text = folder;
+            RememberFolder(folder);
+            return;
+        }
+
+        if (!IsAudioFile(file))
+        {
+            MessageBox.Show(this, Messages.DropWave, Messages.Title,
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (y < Label2.Top - Label2.Height) SetOriginal(file);
+        else SetInstrumental(file);
+    }
+
+    private void Play(string path)
+    {
+        path = path.Trim();
+        if (path.Length == 0 || !File.Exists(path)) return;
+        // v4: 再生中も main window を使え、複数の再生 window を同時に開ける。
+        new PlaybackForm(path) { StartPosition = FormStartPosition.CenterParent }.Show(this);
+    }
+
+    private async void StartBtnClick(object? sender, EventArgs e)
+    {
+        if (IsRunning)
+        {
+            if (ConfirmHalt()) _cancel?.Cancel();
+            return;
+        }
+
+        string original = Edit1.Text.Trim();
+        string instrumental = Edit2.Text.Trim();
+        string folder = Edit3.Text.Trim();
+
+        if (!ValidateInputs(original, instrumental, folder, out string output)) return;
+        await NoticeGpuOnce();
+
+        _cancel = new CancellationTokenSource();
+        var token = _cancel.Token;
+        var settings = _settings.Values;   // 処理開始時に settings を値コピーして snapshot 化する。
+
+        SetRunning(true);
+        LogHub.Busy = true;
+        LogHub.Line(new string('-', 72));
+        LogHub.Line($"start  {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        int rc = 0;
+        string error = "";
+        CoreResult result = default;
+        int lastPercent = -1;
+
+        try
+        {
+            rc = await Task.Run(() => Core.ExtractFile(
+                original, instrumental, output, settings,
+                fraction =>
+                {
+                    int pct = (int)(fraction * 100);
+                    if (pct != lastPercent)
+                    {
+                        lastPercent = pct;
+                        BeginInvoke(() => ProgBar1.Value = Math.Clamp(pct, 0, 100));
+                    }
+                    return !token.IsCancellationRequested;
+                },
+                out result, out error));
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            rc = -1;
+            error = ex.Message;
+            LogHub.Exception("the native core could not be called", ex);
+        }
+        catch (Exception ex)
+        {
+            // 想定外の .NET 側の失敗。本当の stack trace を terminal と log に残す。
+            rc = -1;
+            error = $"{ex.GetType().Name}: {ex.Message}";
+            LogHub.Exception("unexpected error while processing", ex);
+        }
+        finally
+        {
+            _cancel.Dispose();
+            _cancel = null;
+            SetRunning(false);
+            LogHub.Busy = false;
+        }
+        LogHub.Line(rc switch
+        {
+            0 when settings.OutputKind is 1 or 2 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {Core.OutputPaths(output, settings.OutputKind).First} + {Core.OutputPaths(output, settings.OutputKind).Second}",
+            0 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {output}",
+            4 => "cancelled",
+            _ => $"failed (code {rc}) after {clock.Elapsed:mm\\:ss\\.f}",
+        });
+
+        if (rc == 0)
+        {
+            ProgBar1.Value = 100;
+            string note = ConversionNote(result);
+            if (result.GpuUsed != 0) note = (note.Length > 0 ? note + "\n" : "") + Messages.GpuUsed(result.GpuAdapter);
+            Hints.SetToolTip(InfoLabel, note);
+            if (_debugMode) ReportDebug(output, result);
+        }
+        else if (rc == 4)
+        {
+            ProgBar1.Value = 0;
+        }
+        else
+        {
+            ProgBar1.Value = 0;
+            MessageBox.Show(this, (rc == 6 ? $"{Messages.FileCreateError}\n\n{error}" : error) + Messages.SeeTerminal,
+                            Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+
+        if (_closeWhenIdle) Close();
+    }
+
+    /// GPU を使う設定なのに使えないとき、最初の Start で一度だけ知らせる。「今後表示しない」を選べる。
+    private async Task NoticeGpuOnce()
+    {
+        if (_gpuNoticeShown || _settings.Values.UseGpu == 0 || _settings.Values.GpuNoticeHidden != 0) return;
+        _gpuNoticeShown = true;
+        var gpu = await Task.Run(() => Core.Gpu);
+        if (gpu.Available) return;
+        using var notice = new GpuNoticeForm(gpu.Reason);
+        notice.ShowDialog(this);
+        if (notice.DontShowAgain)
+        {
+            _settings.Values.GpuNoticeHidden = 1;
+            _settings.Save();
+        }
+    }
+
+    /// 処理前 check。形式・bit depth・sample rate の違いは core 側で吸収するので、ここでは読めるかだけ確かめる。
+    private bool ValidateInputs(string original, string instrumental, string folder, out string output)
+    {
+        output = "";
+        bool split = _settings.Values.OutputKind == 2;
+        if (split && (original.Length == 0 || folder.Length == 0))
+            return Fail(Messages.NeedOriginal);
+        if (!split && (original.Length == 0 || instrumental.Length == 0 || folder.Length == 0))
+            return Fail(Messages.NeedFiles);
+
+        // 出力先の folder は無ければ作る (既定の Music\Utagoe も初回はまだ無い)。
+        try { Directory.CreateDirectory(folder); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return Fail(Messages.FolderError(folder, ex.Message));
+        }
+        RememberFolder(folder);
+        output = OutputFileFor(original, folder);
+
+        static string Full(string p) { try { return Path.GetFullPath(p); } catch { return p; } }
+        // 揃えた組は出力欄の名前から作る 2 ファイルを書くので、その 2 つを入力と比べる。
+        bool pair = _settings.Values.OutputKind == 1;
+        if (pair && string.Equals(Full(original), Full(instrumental), StringComparison.OrdinalIgnoreCase))
+            return Fail(Messages.PairNeedsTwo);
+        var (pairMain, pairInst) = pair || split ? Core.OutputPaths(output, _settings.Values.OutputKind) : (output, output);
+        foreach (string written in new[] { pairMain, pairInst })
+            if (string.Equals(Full(written), Full(original), StringComparison.OrdinalIgnoreCase) ||
+                (!split && string.Equals(Full(written), Full(instrumental), StringComparison.OrdinalIgnoreCase)))
+                return Fail(Messages.SameInputOutput);
+
+        if (!Core.TryProbeAudio(original, out _, out string e1))
+            return Fail(Messages.Unreadable("original", e1));
+        if (!split && !Core.TryProbeAudio(instrumental, out _, out string e2))
+            return Fail(Messages.Unreadable("instrumental", e2));
+
+        return true;
+
+        bool Fail(string msg)
+        {
+            MessageBox.Show(this, msg, Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+    }
+
+    /// インストを原曲の形式へ変換した場合は、その内容を status 欄の tooltip に出す。
+    private static string ConversionNote(in CoreResult r)
+    {
+        if (r.InstrumentalRateIn == r.OutputRate && r.InstrumentalChannelsIn == r.OutputChannels) return "";
+        static string Ch(int n) => n switch { 1 => L.T("Mono"), 2 => L.T("Stereo"), _ => $"{n}ch" };
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        return string.Format(inv, L.T("Instrumental converted: {0:F3}kHz {1} → {2:F3}kHz {3}"),
+                             r.InstrumentalRateIn / 1000.0, Ch(r.InstrumentalChannelsIn),
+                             r.OutputRate / 1000.0, Ch(r.OutputChannels));
+    }
+
+    private void ApplyOutputKind()
+    {
+        bool needsInstrumental = _settings.Values.OutputKind != 2;
+        foreach (Control c in new Control[] { Label2, Edit2, BitBtn2, PlayBtn2 })
+            c.Enabled = needsInstrumental && !IsRunning;
+    }
+
+    private void SetRunning(bool running)
+    {
+        StartBtn.Text = running ? Messages.Running : Messages.Start;
+
+        foreach (Control c in new Control[]
+                 { Edit1, Edit2, Edit3, BitBtn1, BitBtn2, BitBtn3,
+                   PlayBtn1, PlayBtn2, SetBitBtn })
+            c.Enabled = !running;
+        if (!running) ApplyOutputKind();
+
+        if (running)
+        {
+            ProgBar1.Value = 0;
+            _elapsed = 0;
+            InfoLabel.Text = Messages.Elapsed(0);
+            ElapsedTimer.Start();
+        }
+        else
+        {
+            ElapsedTimer.Stop();
+        }
+    }
+
+    private bool ConfirmHalt() =>
+        MessageBox.Show(this, Messages.HaltProcess, Messages.Title,
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
+
+    /// debug mode では output 横に .txt を書く。元実装の中身は未追跡なので alignment debug line のみ出す。
+    private void ReportDebug(string output, CoreResult result)
+    {
+        string line = result.Debug;
+        try { File.WriteAllText(Path.ChangeExtension(output, ".txt"), line + Environment.NewLine); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        InfoLabel.Text = $"ofs {result.Offset}";
+        Hints.SetToolTip(InfoLabel, line);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        // 処理中の close は確認を出し、worker が止まってから実際に window を閉じる。
+        if (IsRunning)
+        {
+            e.Cancel = true;
+            if (ConfirmHalt())
+            {
+                _closeWhenIdle = true;
+                _cancel?.Cancel();
+            }
+            return;
+        }
+        base.OnFormClosing(e);
+    }
+
+    // v4: Settings は modal にしない (MainForm.Panels.cs)。
+    private void SetBitBtnClick(object? sender, EventArgs e) => ShowSettings();
+
+    // Help は元の PDF の代わりに terminal を開く。
+    private void HelpBtnClick(object? sender, EventArgs e) => ShowTerminal();
+
+    private void DbgPanelDblClick(object? sender, EventArgs e)
+    {
+        _debugMode = !_debugMode;
+        MessageBox.Show(this, Messages.DebugModeIs + (_debugMode ? "ON" : "OFF"), Messages.Title,
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+}
