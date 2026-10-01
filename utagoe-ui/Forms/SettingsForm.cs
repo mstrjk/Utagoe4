@@ -90,103 +90,14 @@ internal sealed partial class SettingsForm : Form
         }
     }
 
-    private ResetPrompt? _resetPrompt;
-
-    /// 既定値に戻す。theme の色の確認を window の中央に出してから戻す (Windows の message box は使わない)。
-    /// 組み込み中は main window の Reset から呼ばれ、すぐに保存される。別 window では OK を押すまで保存しない。
     public void ResetToDefaults()
     {
-        if (_resetPrompt is { IsDisposed: false }) { _resetPrompt.Focus(); return; }
-        // main window 全体の中央に重ねる (組み込み中の Settings は main window の一部なので、その上に出す)。
-        Control host = TopLevelControl ?? this;
-        var prompt = new ResetPrompt(Font, _docked ? Messages.ResetConfirm : Messages.ResetConfirmOk);
-        _resetPrompt = prompt;
-        prompt.Answered += yes =>
-        {
-            host.Controls.Remove(prompt);
-            prompt.Dispose();
-            _resetPrompt = null;
-            if (!yes) return;
-            Populate(AppSettings.Defaults());
-            if (_docked) ApplyNow();
-        };
-        Size size = prompt.PreferredBoxSize(Math.Min(host.ClientSize.Width - 40, Font.Height * 28));
-        prompt.Bounds = new Rectangle((host.ClientSize.Width - size.Width) / 2, (host.ClientSize.Height - size.Height) / 2, size.Width, size.Height);
-        host.Controls.Add(prompt);
-        prompt.BringToFront();
-        prompt.Focus();
-    }
-
-    /// Reset の確認。見出し・説明・Reset / Cancel の button を theme の色で描く小さな板。
-    private sealed class ResetPrompt : Panel
-    {
-        private readonly BitBtn _yes, _no;
-        private readonly Font _bold;
-        public event Action<bool>? Answered;
-
-        private readonly string _text;
-
-        public ResetPrompt(Font font, string text)
-        {
-            _text = text;
-            Font = font;
-            _bold = new Font(font, FontStyle.Bold);
-            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
-            _yes = new BitBtn { Text = Messages.Reset, TabIndex = 0 };
-            _yes.SetGlyph("BBOK");
-            _no = new BitBtn { Text = "Cancel", TabIndex = 1 };
-            _no.SetGlyph("BBCANCEL");
-            _yes.Click += (_, _) => Answered?.Invoke(true);
-            _no.Click += (_, _) => Answered?.Invoke(false);
-            Controls.AddRange(new Control[] { _yes, _no });
-            Theme.Paint(this);
-        }
-
-        private int Pad => Font.Height;
-
-        public Size PreferredBoxSize(int width)
-        {
-            int inner = width - Pad * 2;
-            Size t = TextRenderer.MeasureText(Messages.ResetTitle, _bold, new Size(inner, int.MaxValue), TextFormatFlags.WordBreak);
-            Size b = TextRenderer.MeasureText(_text, Font, new Size(inner, int.MaxValue), TextFormatFlags.WordBreak);
-            int bh = Font.Height * 2;
-            return new Size(width, Pad + t.Height + Pad / 2 + b.Height + Pad + bh + Pad);
-        }
-
-        protected override void OnLayout(LayoutEventArgs e)
-        {
-            base.OnLayout(e);
-            if (_yes == null || _no == null) return;   // constructor の中で Font を入れた時点ではまだ button が無い
-            int bh = Font.Height * 2, bw = Font.Height * 6, gap = Pad / 2;
-            int left = (Width - (bw * 2 + gap)) / 2;
-            _yes.SetBounds(left, Height - Pad - bh, bw, bh);
-            _no.SetBounds(left + bw + gap, _yes.Top, bw, bh);
-        }
-
-        protected override void OnPaint(PaintEventArgs e)
-        {
-            var g = e.Graphics;
-            var t = Theme.Current;
-            using (var back = new SolidBrush(t.TipBack)) g.FillRectangle(back, ClientRectangle);
-            using (var edge = new Pen(t.TipEdge)) g.DrawRectangle(edge, 0, 0, Width - 1, Height - 1);
-            int inner = Width - Pad * 2;
-            var flags = TextFormatFlags.WordBreak;
-            Size ts = TextRenderer.MeasureText(g, Messages.ResetTitle, _bold, new Size(inner, int.MaxValue), flags);
-            TextRenderer.DrawText(g, Messages.ResetTitle, _bold, new Rectangle(Pad, Pad, inner, ts.Height), t.TipText, flags);
-            TextRenderer.DrawText(g, _text, Font, new Rectangle(Pad, Pad + ts.Height + Pad / 2, inner, Height), t.TipText, flags);
-        }
-
-        protected override bool ProcessDialogKey(Keys keyData)
-        {
-            if (keyData == Keys.Escape) { Answered?.Invoke(false); return true; }
-            return base.ProcessDialogKey(keyData);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) _bold.Dispose();
-            base.Dispose(disposing);
-        }
+        var answer = MessageForm.Show(TopLevelControl ?? this, _docked ? Messages.ResetConfirm : Messages.ResetConfirmOk,
+                                      Messages.Title, MessageBoxButtons.OKCancel, MessageBoxIcon.Question,
+                                      heading: Messages.ResetTitle, confirm: Messages.Reset);
+        if (answer != DialogResult.OK) return;
+        Populate(AppSettings.Defaults());
+        if (_docked) ApplyNow();
     }
 
     // 組み込み中は、どの設定を変えてもすぐに (少し待ってまとめて) 保存する。

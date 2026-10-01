@@ -6,9 +6,10 @@ namespace Utagoe.Forms;
 internal sealed class MessageForm : Form
 {
     public static DialogResult Show(IWin32Window? owner, string text, string caption,
-                                    MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None)
+                                    MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None,
+                                    string? heading = null, string? confirm = null)
     {
-        using var f = new MessageForm(text, caption, buttons, icon, owner != null);
+        using var f = new MessageForm(text, caption, buttons, icon, owner != null, heading, confirm);
         return owner != null ? f.ShowDialog(owner) : f.ShowDialog();
     }
 
@@ -16,7 +17,8 @@ internal sealed class MessageForm : Form
                                     MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None) =>
         Show(null, text, caption, buttons, icon);
 
-    private MessageForm(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, bool owned)
+    private MessageForm(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, bool owned,
+                        string? heading, string? confirm)
     {
         AutoScaleMode = AutoScaleMode.None;
         Font = new Font("Tahoma", 9F);
@@ -62,6 +64,20 @@ internal sealed class MessageForm : Form
         need = TextRenderer.MeasureText(text, Font, new Size(textWidth, int.MaxValue), flags);
         int textHeight = Math.Min(need.Height + S(2), S(340));
         int textTop = sys != null ? S(16) + Math.Max(0, (S(32) - Math.Min(textHeight, S(32))) / 2) : S(16);
+        if (heading != null)
+        {
+            var bold = new Font(Font, FontStyle.Bold);
+            int hh = TextRenderer.MeasureText(heading, bold, new Size(textWidth, int.MaxValue), flags).Height;
+            Controls.Add(new ThemedLabel
+            {
+                Text = heading,
+                Font = bold,
+                UseMnemonic = false,
+                Bounds = new Rectangle(left, S(16), textWidth, hh + S(2)),
+                BackColor = Color.Transparent,
+            });
+            textTop = S(16) + hh + S(8);
+        }
         var label = new ThemedLabel
         {
             Text = text,
@@ -90,6 +106,7 @@ internal sealed class MessageForm : Form
             var b = new BitBtn { Bounds = new Rectangle(x, rowTop, bw, bh), TabIndex = made.Count };
             if (kind != BitBtnKind.Custom) b.SetKind(kind);
             else b.Text = L.T(label2);
+            if (confirm != null && made.Count == 0) b.Text = confirm;
             b.DialogResult = result;
             Controls.Add(b);
             made.Add(b);
