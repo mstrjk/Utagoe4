@@ -443,37 +443,37 @@ internal sealed partial class SettingsForm : Form
         bool SideAlgorithm() => ModelValue >= FirstSideAlgorithm && ModelValue <= LastSideAlgorithm;
         string ModelName() => Messages.ModelShortNames[Math.Clamp(ModelValue, 0, Messages.ModelShortNames.Length - 1)];
 
-        void Tip(Control target, string text, Func<string?> why) =>
-            _links.Add(target, () => why() is { } reason ? text + Messages.Tips.NotNow + reason : text);
+        void Tip(Control target, Func<string> text, Func<string?> why) =>
+            _links.Add(target, () => why() is { } reason ? text() + Messages.Tips.NotNow + reason : text());
 
         string? V3Analysis() => Split() ? NoX() : Gcc() ? Messages.Tips.BecauseGcc : null;
         string? FreqOnly() => Pair() ? NoX() : Wave() ? Messages.Tips.BecauseFreqOnly : null;
 
-        Tip(IntroRadioGroup, Messages.Tips.Intro, V3Analysis);
-        Tip(AdptLvlGroupBox, Messages.Tips.TimeShift, V3Analysis);
-        Tip(MergeRadioGroup, Messages.Tips.Method, () => Pair() ? NoX() : null);
-        Tip(SoundQtyGroup, Messages.Tips.Accuracy, FreqOnly);
-        Tip(KvolCaption, Messages.Tips.ExtractLevel, FreqOnly);
-        Tip(LevelRadioGroup, Messages.Tips.Level, () =>
+        Tip(IntroRadioGroup, () => Messages.Tips.Intro, V3Analysis);
+        Tip(AdptLvlGroupBox, () => Messages.Tips.TimeShift, V3Analysis);
+        Tip(MergeRadioGroup, () => Messages.Tips.Method, () => Pair() ? NoX() : null);
+        Tip(SoundQtyGroup, () => Messages.Tips.Accuracy, FreqOnly);
+        Tip(KvolCaption, () => Messages.Tips.ExtractLevel, FreqOnly);
+        Tip(LevelRadioGroup, () => Messages.Tips.Level, () =>
             Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : Model() ? Messages.Tips.BecauseModel(ModelName()) : null);
 
-        Tip(DataRadioGroup, Messages.Tips.ProcMode, V3Analysis);
-        Tip(PhaseRadioGroup, Messages.Tips.Phase, V3Analysis);
-        Tip(FilterBox, Messages.Tips.Filtering, () => Pair() ? NoX() : null);
-        Tip(OvspBox, Messages.Tips.Oversampling, () => V3Analysis() ?? (!Pair() && !Wave() ? Messages.Tips.BecauseWaveOnly : null));
-        Tip(BsizeBox, Messages.Tips.Block, V3Analysis);
+        Tip(DataRadioGroup, () => Messages.Tips.ProcMode, V3Analysis);
+        Tip(PhaseRadioGroup, () => Messages.Tips.Phase, V3Analysis);
+        Tip(FilterBox, () => Messages.Tips.Filtering, () => Pair() ? NoX() : null);
+        Tip(OvspBox, () => Messages.Tips.Oversampling, () => V3Analysis() ?? (!Pair() && !Wave() ? Messages.Tips.BecauseWaveOnly : null));
+        Tip(BsizeBox, () => Messages.Tips.Block, V3Analysis);
 
-        Tip(VnameCheckBox.Parent!, Messages.Tips.FileName, () => null);
-        Tip(OutKindCombo.Parent!, Messages.Tips.Output, () => null);
-        Tip(GpuCheckBox.Parent!, Messages.Tips.Gpu, () => GpuCheckBox.Checked ? null : Messages.Tips.BecauseGpuOff);
+        Tip(VnameCheckBox.Parent!, () => Messages.Tips.FileName, () => null);
+        Tip(OutKindCombo.Parent!, () => Messages.Tips.Output, () => null);
+        Tip(GpuCheckBox.Parent!, () => Messages.Tips.Gpu, () => GpuCheckBox.Checked ? null : Messages.Tips.BecauseGpuOff);
 
-        Tip(ModelRadioGroup, Messages.Tips.Model, () => Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : null);
-        Tip(AlignRadioGroup, Messages.Tips.Align, () => Split() ? NoX() : Auto() ? Messages.Tips.BecauseAuto : Pair() || (Wave() && Model()) ? null : Messages.Tips.BecauseV3Align);
-        Tip(SpansBox, Messages.Tips.Spans, () =>
+        Tip(ModelRadioGroup, () => Messages.Tips.Model, () => Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : null);
+        Tip(AlignRadioGroup, () => Messages.Tips.Align, () => Split() ? NoX() : Auto() ? Messages.Tips.BecauseAuto : Pair() || (Wave() && Model()) ? null : Messages.Tips.BecauseV3Align);
+        Tip(SpansBox, () => Messages.Tips.Spans, () =>
             Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : !Model() ? Messages.Tips.BecauseV3Model :
             SideAlgorithm() ? Messages.Tips.BecauseNoSpans(ModelName()) : null);
-        Tip(CentreRadioGroup, Messages.Tips.Centre, () => Split() ? null : Messages.Tips.BecauseNotSplit);
-        Tip(KickDuckCheckBox, Messages.Tips.KickDuck, () =>
+        Tip(CentreRadioGroup, () => Messages.Tips.Centre, () => Split() ? null : Messages.Tips.BecauseNotSplit);
+        Tip(KickDuckCheckBox, () => Messages.Tips.KickDuck, () =>
             Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : !Model() ? Messages.Tips.BecauseV3Model : null);
     }
 

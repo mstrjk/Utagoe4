@@ -49,6 +49,7 @@
     <!-- v4: About で選べる app icon の色違い (32-bit BMP、alpha 付き)。AppIcons が読む。 -->
     <EmbeddedResource Include="Resources\Icons\*.bmp" LogicalName="Utagoe.Resources.Icons.%(Filename).bmp" />
     <EmbeddedResource Include="Resources\Logos\*.bmp" LogicalName="Utagoe.Resources.Logos.%(Filename).bmp" />
+    <EmbeddedResource Include="Resources\Lang\*.json" LogicalName="Utagoe.Resources.Lang.%(Filename).json" />
   </ItemGroup>
 
   <!-- native DLL (utagoe_core.dll と同梱ライブラリの utagoe-*.dll)。先に build.ps1 で utagoe-core を build する。

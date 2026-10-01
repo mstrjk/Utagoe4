@@ -9,20 +9,38 @@ namespace Utagoe.Vcl;
 internal sealed class InfoPane : Control
 {
     private string _text = "";
+    private readonly VScrollBar _bar = new() { Dock = DockStyle.Right, Visible = false };
 
     public InfoPane()
     {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                  ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
         BackColor = Color.Transparent;
-        App.Theme.Changed += Invalidate;
-        Disposed += (_, _) => App.Theme.Changed -= Invalidate;
+        _bar.Width = SystemInformation.VerticalScrollBarWidth;
+        _bar.Scroll += (_, _) => Invalidate();
+        _bar.HandleCreated += (_, _) => DarkScroll.Apply(_bar, App.Theme.Current.Dark);
+        Controls.Add(_bar);
+        void Rethemed() { DarkScroll.Apply(_bar, App.Theme.Current.Dark); Invalidate(); }
+        App.Theme.Changed += Rethemed;
+        Disposed += (_, _) => App.Theme.Changed -= Rethemed;
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        if (_bar.Visible)
+        {
+            int max = Math.Max(0, _bar.Maximum - _bar.LargeChange + 1);
+            _bar.Value = Math.Clamp(_bar.Value - Math.Sign(e.Delta) * _bar.SmallChange * 3, 0, max);
+            Invalidate();
+        }
+        base.OnMouseWheel(e);
     }
 
     public void ShowText(string text)
     {
         if (text == _text) return;
         _text = text;
+        _bar.Value = 0;
         Invalidate();
     }
 
@@ -36,9 +54,10 @@ internal sealed class InfoPane : Control
 
         using var bold = new Font(Font.FontFamily, Font.Size * 1.15f, FontStyle.Bold, Font.Unit);
         using var link = new Font(Font, FontStyle.Underline);
-        int width = Math.Max(10, Width);
+        int width = Math.Max(10, Width - (_bar.Visible ? _bar.Width + 4 : 0));
+        int top = _bar.Visible ? -_bar.Value : 0;
         Size ts = TextRenderer.MeasureText(g, title, bold, new Size(width, int.MaxValue), TextFormatFlags.WordBreak);
-        TextRenderer.DrawText(g, title, bold, new Rectangle(0, 0, width, ts.Height), t.Text, TextFormatFlags.WordBreak);
+        TextRenderer.DrawText(g, title, bold, new Rectangle(0, top, width, ts.Height), t.Text, TextFormatFlags.WordBreak);
         int y = ts.Height + Font.Height / 2;
 
         // 本文を段落ごとに、語単位で折り返して描く。__ で囲んだ語は link の色と下線。
@@ -55,12 +74,29 @@ internal sealed class InfoPane : Control
                     Font f = inLink ? link : Font;
                     int w = TextRenderer.MeasureText(g, word, f, Size.Empty, TextFormatFlags.NoPadding).Width;
                     if (x > 0 && x + w > width) { x = 0; y += line; }
-                    TextRenderer.DrawText(g, word, f, new Point(x, y), inLink ? t.Link : t.Text, TextFormatFlags.NoPadding);
+                    TextRenderer.DrawText(g, word, f, new Point(x, y + top), inLink ? t.Link : t.Text, TextFormatFlags.NoPadding);
                     x += w + space;
                 }
                 inLink = !inLink;
             }
             y += line;
+        }
+
+        bool overflow = y > Height;
+        if (overflow != _bar.Visible)
+        {
+            _bar.Visible = overflow;
+            if (!overflow) _bar.Value = 0;
+            Invalidate();
+        }
+        if (overflow)
+        {
+            _bar.Minimum = 0;
+            _bar.LargeChange = Math.Max(1, Height);
+            _bar.SmallChange = Math.Max(1, line);
+            _bar.Maximum = Math.Max(0, y - 1);
+            if (_bar.Value > y - Height) _bar.Value = Math.Max(0, y - Height);
+            return;
         }
 
         var logo = VclGlyph.ThemeLogo();

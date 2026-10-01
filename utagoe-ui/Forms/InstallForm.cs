@@ -15,7 +15,7 @@ internal sealed class InstallForm : XpTerminalWindow
     {
         Text = L.T("Utagoe Setup");
         Heading = "Setting up Utagoe";
-        Subheading = "One-time setup: Utagoe installs itself for your Windows account. No administrator rights needed.";
+        Subheading = "One-time setup, no admin rights needed.";
         ClientSize = new Size(640, 340);
         StartPosition = FormStartPosition.CenterScreen;
         Terminal.AcceptsInput = false;

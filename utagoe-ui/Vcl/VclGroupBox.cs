@@ -34,15 +34,17 @@ internal class VclGroupBox : GroupBox
     {
         var t = App.Theme.Current;
         var flags = TextFormatFlags.SingleLine | TextFormatFlags.Left | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+        int top = Math.Max(text.Length > 0 ? TextRenderer.MeasureText(g, text, font, Size.Empty, flags).Height : 0, font.Height) / 2;
+        using var fit = FitText.Shrink(g, text, font, r.Width - 14, flags);
+        if (fit != null) font = fit;
         Size caption = text.Length > 0 ? TextRenderer.MeasureText(g, text, font, Size.Empty, flags) : Size.Empty;
-        int top = Math.Max(caption.Height, font.Height) / 2;
         using (var pen = new Pen(t.Line))
             g.DrawRectangle(pen, r.X, r.Y + top, r.Width - 1, r.Height - top - 1);
         if (caption.Width > 0)
         {
             int x = r.X + 7;
             using (var b = new SolidBrush(back)) g.FillRectangle(b, x - 2, r.Y, caption.Width + 4, caption.Height);
-            TextRenderer.DrawText(g, text, font, new Point(x, r.Y), textColor, flags);
+            TextRenderer.DrawText(g, text, font, new Point(x, r.Y + Math.Max(0, top - caption.Height / 2)), textColor, flags);
         }
     }
 }
