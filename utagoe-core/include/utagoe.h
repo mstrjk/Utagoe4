@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -38,7 +39,7 @@ enum class WaveModel { V3 = 0, Robust = 1, Kalman = 2, Hammerstein = 3, Nmf = 4,
 // 代替モデルの位置合わせ。V3Block は元実装の解析と block ごとの drift 探索、Gcc は相互相関による offset + clock drift。
 enum class WaveAlign { V3Block = 0, Gcc = 1, Dense = 2 };
 // 出力するもの (v3 にない拡張)。Vocal は抽出した声。AlignedPair は原曲と、その時間軸に合わせたインストの 2 ファイル。
-enum class OutputKind { Vocal = 0, AlignedPair = 1, CenterSides = 2 };
+enum class OutputKind { Vocal = 0, AlignedPair = 1, CenterSides = 2, Repeats = 3 };
 
 struct Settings {
     ProcMode  procMode  = ProcMode::Normal;
@@ -89,9 +90,12 @@ struct Settings {
     // 出力するもの。INI では [Output] section の Kind。AlignedPair の位置合わせは waveAlign に従う (処理方式には依らない)。
     OutputKind  outputKind = OutputKind::Vocal;
     int         centerMethod = 1;
+    int         repeatGuide = 0;
+    int         repeatBreadth = 0;
 
     // 出力先の folder (UI が使う。core の処理には関係しない)。INI では [Output] section の Folder。空なら UI の既定。
     std::string outputFolder;
+    bool        overwriteOutput = false;
 
     // UI の見た目 (core の処理には関係しない)。INI では [UI] section。appIcon は app icon の色違いの名前 (空なら standard)。
     std::string appIcon;
@@ -221,6 +225,31 @@ bool parseTimeSpans(const std::string& text, std::vector<std::pair<double, doubl
 void alignedPairPaths(const std::string& output, std::string& mainPath, std::string& instPath);
 void outputPaths(const std::string& output, OutputKind kind, std::string& first, std::string& second);
 ExtractResult extractCenterSides(const AudioBuffer& original, const Settings& settings, ProgressFn progress = nullptr, void* progressUser = nullptr);
+
+struct RepeatClip {
+    std::string name;
+    std::string status;
+    std::string quality;
+    std::string guide;
+    double source = 0, target = 0, duration = 0;
+    double reductionDb = 0, correlation = 0, delayMs = 0, ratePpm = 0;
+    bool joint = false;
+    bool passed = false;
+    AudioBuffer shared;
+    AudioBuffer difference;
+};
+
+struct RepeatsResult {
+    std::vector<RepeatClip> clips;
+    int regions = 0;
+    bool cancelled = false;
+    std::string error;
+
+    explicit operator bool() const { return error.empty() && !cancelled; }
+};
+
+RepeatsResult extractRepeats(const AudioBuffer& original, const Settings& settings, const std::function<bool(RepeatClip&)>& sink,
+                             ProgressFn progress = nullptr, void* progressUser = nullptr);
 
 // 2 つの path が同じファイルを指すか。元実装は path 文字列の一致で判定するが、ここでは実体で比べる。
 bool sameFile(const std::string& a, const std::string& b);

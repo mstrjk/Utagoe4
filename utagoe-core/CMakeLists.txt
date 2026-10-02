@@ -4,6 +4,13 @@
 cmake_minimum_required(VERSION 3.21)
 project(utagoe_core C CXX)
 
+file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/../VERSION UTAGOE_VERSION LIMIT_COUNT 1)
+string(STRIP "${UTAGOE_VERSION}" UTAGOE_VERSION)
+string(REPLACE "." ";" UTAGOE_VERSION_PARTS "${UTAGOE_VERSION}")
+list(GET UTAGOE_VERSION_PARTS 0 UTAGOE_VERSION_MAJOR)
+list(GET UTAGOE_VERSION_PARTS 1 UTAGOE_VERSION_MINOR)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../VERSION)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 99)
@@ -139,14 +146,25 @@ set(CODEC_DLLS ogg_dll opus_dll flac_dll vorbis_dll opusfile_dll opusenc_dll drl
 
 
 set(CORE_SOURCES
-    src/fft.cpp src/vocal_func.cpp src/fir.cpp
-    src/settings.cpp src/freq_engine.cpp src/worker.cpp src/engine.cpp src/pipeline.cpp src/parallel.cpp src/gpu.cpp
-    src/refcancel/rc_dsp.cpp src/refcancel/rc_engines.cpp src/refcancel/rc_pipeline.cpp src/extract.cpp src/resample.cpp
-    src/hardpair/hp_dsp.cpp src/hardpair/hp_warp.cpp src/hardpair/hp_phase.cpp src/hardpair/hp_engines.cpp src/hardpair/hp_pipeline.cpp src/hardpair/hp_kick.cpp src/centresides/cs.cpp
-    src/decode.cpp src/encode.cpp src/mediafoundation.cpp src/log.cpp)
+    src/fft.cpp src/settings.cpp src/parallel.cpp src/gpu.cpp src/extract.cpp src/resample.cpp
+    src/decode.cpp src/encode.cpp src/mediafoundation.cpp src/log.cpp
+    src/algorithms/v3/engine.cpp src/algorithms/v3/freq_engine.cpp src/algorithms/v3/vocal_func.cpp src/algorithms/v3/fir.cpp
+    src/algorithms/v3/pipeline.cpp src/algorithms/v3/worker.cpp
+    src/algorithms/refcancel/rc_dsp.cpp src/algorithms/refcancel/rc_pipeline.cpp
+    src/algorithms/refcancel/robust.cpp src/algorithms/refcancel/kalman.cpp src/algorithms/refcancel/hammerstein.cpp
+    src/algorithms/refcancel/nmf.cpp src/algorithms/refcancel/spatial.cpp src/algorithms/refcancel/ensemble.cpp
+    src/algorithms/hardpair/hp_dsp.cpp src/algorithms/hardpair/hp_grid.cpp src/algorithms/hardpair/hp_pipeline.cpp
+    src/algorithms/hardpair/time_map.cpp src/algorithms/hardpair/rational.cpp src/algorithms/hardpair/surface.cpp
+    src/algorithms/hardpair/ctf.cpp src/algorithms/hardpair/lowrank.cpp src/algorithms/hardpair/trend.cpp
+    src/algorithms/hardpair/kick_duck.cpp
+    src/algorithms/centresides/cs.cpp src/algorithms/centresides/true_ms.cpp src/algorithms/centresides/phantom.cpp
+    src/algorithms/centresides/coherence.cpp src/algorithms/centresides/adress.cpp src/algorithms/centresides/duet.cpp
+    src/algorithms/centresides/pca.cpp src/algorithms/centresides/pretty.cpp
+    src/algorithms/findwithin/fw_dsp.cpp src/algorithms/findwithin/fw_workers.cpp src/algorithms/findwithin/fw_discovery.cpp
+    src/algorithms/findwithin/fw_align.cpp src/algorithms/findwithin/fw_verify.cpp src/algorithms/findwithin/fw_run.cpp)
 
 add_library(utagoe_objs OBJECT ${CORE_SOURCES})
-target_include_directories(utagoe_objs PUBLIC include)
+target_include_directories(utagoe_objs PUBLIC include src)
 target_link_libraries(utagoe_objs PUBLIC ${CODEC_DLLS})
 if(WIN32)
     # AAC/M4A, ALAC, WMA などは Windows 標準の Media Foundation で扱う。
@@ -186,7 +204,7 @@ target_link_libraries(utagoe_bench PRIVATE utagoe_objs)
 target_link_options(utagoe_bench PRIVATE ${STATIC_RUNTIME})
 
 # By Waveform 代替モデルを Python 版の出力と照合する道具。配布物には含めない。
-foreach(parity rc hp cs)
+foreach(parity rc hp cs fw)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${parity}_parity.cpp)
         add_executable(utagoe_${parity}_parity EXCLUDE_FROM_ALL tests/${parity}_parity.cpp)
         target_link_libraries(utagoe_${parity}_parity PRIVATE utagoe_objs)
@@ -207,7 +225,8 @@ if(UTAGOE_SETUP_PAYLOAD)
     enable_language(RC)
     set(UTAGOE_SETUP_PACKED ${CMAKE_CURRENT_BINARY_DIR}/setup_payload.bin)
     set(UTAGOE_SETUP_ICON ${CMAKE_CURRENT_SOURCE_DIR}/../utagoe-ui/Resources/Utagoe.ico)
-    set(UTAGOE_SETUP_MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/setup/setup.manifest)
+    set(UTAGOE_SETUP_MANIFEST ${CMAKE_CURRENT_BINARY_DIR}/setup.manifest)
+    configure_file(setup/setup.manifest.in ${UTAGOE_SETUP_MANIFEST} @ONLY)
     # windres は空白を含む include path を扱えないので、header は .rc の中に完全な path で書く。
     set(UTAGOE_SETUP_IDS ${CMAKE_CURRENT_SOURCE_DIR}/setup/setup_ids.h)
     add_custom_command(OUTPUT ${UTAGOE_SETUP_PACKED}

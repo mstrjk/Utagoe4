@@ -4,6 +4,7 @@
 #include "gpu.h"
 #include "log.h"
 #include "parallel.h"
+#include "fileio.h"
 
 #include <FLAC/format.h>
 #include <opus.h>
@@ -72,12 +73,15 @@ void toCpp(const UtagoeSettings& c, Settings& s) {
     s.waveModel = (c.waveModel >= 0 && c.waveModel <= 13) ? static_cast<WaveModel>(c.waveModel) : WaveModel::V3;
     s.waveAlign = (c.waveAlign >= 0 && c.waveAlign <= 2) ? static_cast<WaveAlign>(c.waveAlign) : WaveAlign::V3Block;
     s.fitSpans.assign(c.fitSpans, strnlen(c.fitSpans, UTAGOE_SPANS_MAX));
-    s.outputKind = (c.outputKind >= 0 && c.outputKind <= 2) ? static_cast<OutputKind>(c.outputKind) : OutputKind::Vocal;
+    s.outputKind = (c.outputKind >= 0 && c.outputKind <= 3) ? static_cast<OutputKind>(c.outputKind) : OutputKind::Vocal;
     s.centerMethod = (c.centerMethod >= 0 && c.centerMethod <= 6) ? c.centerMethod : 1;
     s.outputFolder.assign(c.outputFolder, strnlen(c.outputFolder, UTAGOE_PATH_MAX));
     s.appIcon.assign(c.appIcon, strnlen(c.appIcon, UTAGOE_NAME_MAX));
     s.uiLanguage.assign(c.uiLanguage, strnlen(c.uiLanguage, UTAGOE_NAME_MAX));
     s.kickDuck = c.kickDuck != 0;
+    s.repeatGuide = (c.repeatGuide >= 0 && c.repeatGuide <= 2) ? c.repeatGuide : 0;
+    s.repeatBreadth = (c.repeatBreadth >= 0 && c.repeatBreadth <= 1) ? c.repeatBreadth : 0;
+    s.overwriteOutput = c.overwriteOutput != 0;
 }
 
 void toC(const Settings& s, UtagoeSettings& c) {
@@ -126,6 +130,9 @@ void toC(const Settings& s, UtagoeSettings& c) {
     copyString(c.uiLanguage, UTAGOE_NAME_MAX, s.uiLanguage);
     c.kickDuck = s.kickDuck ? 1 : 0;
     c.centerMethod = s.centerMethod;
+    c.repeatGuide = s.repeatGuide;
+    c.repeatBreadth = s.repeatBreadth;
+    c.overwriteOutput = s.overwriteOutput ? 1 : 0;
 }
 
 void setError(char* buf, int32_t len, const std::string& msg) {
@@ -205,10 +212,11 @@ int32_t extractFileImpl(
 
     log::line("original     %s", originalPath);
     const bool split = s.outputKind == OutputKind::CenterSides;
-    if (!split) log::line("instrumental %s", instrumentalPath);
+    const bool repeats = s.outputKind == OutputKind::Repeats;
+    if (!split && !repeats) log::line("instrumental %s", instrumentalPath);
     const bool pair = s.outputKind == OutputKind::AlignedPair;
     std::string mainOut, instOut;
-    if (pair || split) {
+    if (pair || split || repeats) {
         outputPaths(outputPath, s.outputKind, mainOut, instOut);
         log::line("output       %s", mainOut.c_str());
         log::line("             %s", instOut.c_str());
@@ -265,6 +273,85 @@ int32_t extractFileImpl(
             result->outputChannels = r.vocal.channels;
             result->instrumentalRateIn     = r.vocal.sampleRate;
             result->instrumentalChannelsIn = r.vocal.channels;
+        }
+        return 0;
+    }
+
+    if (repeats) {
+        const OutputFormat format = formatFromExtension(outputPath, s.outputFormat);
+        const OutputDepth depth = resolveDepth(s.outputDepth, format, origInfo, origInfo);
+        const std::string ext = extensionOf(format);
+        const std::wstring wdir = longPath(widenUtf8(mainOut));
+        if (!CreateDirectoryW(wdir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
+            setError(errorBuf, errorLen, "Output: cannot create the folder " + mainOut);
+            log::error("cannot create " + mainOut, "");
+            return 6;
+        }
+        {
+            WIN32_FIND_DATAW fd;
+            const HANDLE h = FindFirstFileW((wdir + L"\\*").c_str(), &fd);
+            if (h != INVALID_HANDLE_VALUE) {
+                do {
+                    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+                    std::wstring name = fd.cFileName;
+                    const std::size_t dot = name.find_last_of(L'.');
+                    const std::wstring stem = dot == std::wstring::npos ? name : name.substr(0, dot);
+                    auto ends = [&](const std::wstring& t) { return stem.size() >= t.size() && stem.compare(stem.size() - t.size(), t.size(), t) == 0; };
+                    const bool ours = stem.size() > 3 && iswdigit(stem[0]) && iswdigit(stem[1]) && stem[2] == L'_' && (ends(L"_shared") || ends(L"_difference"));
+                    if (ours) DeleteFileW((wdir + L"\\" + name).c_str());
+                } while (FindNextFileW(h, &fd));
+                FindClose(h);
+            }
+        }
+        EncodeOptions enc;
+        enc.format = format;
+        enc.depth = depth;
+        enc.bitrate = s.outputBitrate;
+        std::string writeError;
+        auto sink = [&](RepeatClip& c) {
+            const std::pair<const char*, const AudioBuffer*> outs[] = {{"_shared", &c.shared}, {"_difference", &c.difference}};
+            for (const auto& [suffix, buf] : outs) {
+                const std::string path = mainOut + "\\" + c.name + suffix + ext;
+                if (!encodeAudio(path, *buf, enc, err)) {
+                    writeError = "cannot write " + path + ": " + err;
+                    return false;
+                }
+            }
+            log::detail("  %s  %.2f dB", c.name.c_str(), c.reductionDb);
+            return true;
+        };
+        ProgressBridge bridge{progress, progressUser};
+        RepeatsResult r = extractRepeats(orig, s, sink, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr);
+        if (!writeError.empty()) { setError(errorBuf, errorLen, "Output: " + writeError); log::error(writeError, ""); return 6; }
+        if (r.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
+        if (!r.error.empty()) { setError(errorBuf, errorLen, r.error); log::error(r.error, ""); return 5; }
+        std::FILE* f = openFile(instOut, "wb");
+        if (!f) {
+            setError(errorBuf, errorLen, "Output: cannot write " + instOut);
+            log::error("cannot write " + instOut, "");
+            return 6;
+        }
+        std::fprintf(f, "file,status,quality,later_start_s,earlier_start_s,duration_s,held_out_reduction_db,correlation,guide,delay_ms,rate_ppm\r\n");
+        int passed = 0;
+        for (const RepeatClip& c : r.clips) {
+            passed += c.passed;
+            char earlier[32] = "";
+            if (!c.joint) std::snprintf(earlier, sizeof earlier, "%.3f", c.source);
+            std::fprintf(f, "%s,%s,%s,%.3f,%s,%.3f,%.3f,%.4f,%s,%.3f,%.2f\r\n", c.passed ? c.name.c_str() : "", c.status.c_str(), c.quality.c_str(), c.target,
+                         earlier, c.duration, c.reductionDb, c.correlation, c.guide.c_str(), c.delayMs, c.ratePpm);
+        }
+        std::fclose(f);
+        if (result) {
+            std::memset(result, 0, sizeof *result);
+            char buf[160];
+            std::snprintf(buf, sizeof buf, "repeats: %d checked, %d passed", static_cast<int>(r.clips.size()), passed);
+            copyString(result->debug, sizeof result->debug, buf);
+            result->outputFormat   = static_cast<int32_t>(format);
+            result->outputDepth    = static_cast<int32_t>(depth);
+            result->outputRate     = orig.sampleRate;
+            result->outputChannels = std::min(orig.channels, 2);
+            result->instrumentalRateIn     = result->outputRate;
+            result->instrumentalChannelsIn = result->outputChannels;
         }
         return 0;
     }
@@ -376,7 +463,7 @@ UTAGOE_API void UTAGOE_CALL utagoe_aligned_pair_paths(const char* outputPath, ch
 UTAGOE_API void UTAGOE_CALL utagoe_output_paths(const char* outputPath, int32_t kind, char* firstBuf, char* secondBuf, int32_t len) {
     if (!outputPath || len <= 0) return;
     std::string a, b;
-    outputPaths(outputPath, kind == 2 ? OutputKind::CenterSides : OutputKind::AlignedPair, a, b);
+    outputPaths(outputPath, kind == 2 ? OutputKind::CenterSides : kind == 3 ? OutputKind::Repeats : OutputKind::AlignedPair, a, b);
     if (firstBuf) copyString(firstBuf, static_cast<std::size_t>(len), a);
     if (secondBuf) copyString(secondBuf, static_cast<std::size_t>(len), b);
 }

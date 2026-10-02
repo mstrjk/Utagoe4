@@ -53,7 +53,6 @@ internal sealed class InfoPane : Control
         string body = nl < 0 ? "" : _text[(nl + 1)..];
 
         using var bold = new Font(Font.FontFamily, Font.Size * 1.15f, FontStyle.Bold, Font.Unit);
-        using var link = new Font(Font, FontStyle.Underline);
         int width = Math.Max(10, Width - (_bar.Visible ? _bar.Width + 4 : 0));
         int top = _bar.Visible ? -_bar.Value : 0;
         Size ts = TextRenderer.MeasureText(g, title, bold, new Size(width, int.MaxValue), TextFormatFlags.WordBreak);
@@ -62,6 +61,9 @@ internal sealed class InfoPane : Control
 
         // 本文を段落ごとに、語単位で折り返して描く。__ で囲んだ語は link の色と下線。
         int line = Font.Height + 2, space = TextRenderer.MeasureText(g, " ", Font, Size.Empty, TextFormatFlags.NoPadding).Width;
+        var family = Font.FontFamily;
+        int baseline = (int)Math.Round(Font.GetHeight(g) * family.GetCellAscent(Font.Style) / family.GetLineSpacing(Font.Style)) + 1;
+        using var linkPen = new Pen(t.Link);
         foreach (string para in body.Split('\n'))
         {
             if (para.Length == 0) { y += line / 2; continue; }
@@ -69,14 +71,23 @@ internal sealed class InfoPane : Control
             bool inLink = false;
             foreach (string piece in para.Split("__"))
             {
+                int runStart = -1, runEnd = 0;
                 foreach (string word in piece.Split(' ', StringSplitOptions.RemoveEmptyEntries))
                 {
-                    Font f = inLink ? link : Font;
-                    int w = TextRenderer.MeasureText(g, word, f, Size.Empty, TextFormatFlags.NoPadding).Width;
-                    if (x > 0 && x + w > width) { x = 0; y += line; }
-                    TextRenderer.DrawText(g, word, f, new Point(x, y + top), inLink ? t.Link : t.Text, TextFormatFlags.NoPadding);
+                    int w = TextRenderer.MeasureText(g, word, Font, Size.Empty, TextFormatFlags.NoPadding).Width;
+                    if (x > 0 && x + w > width)
+                    {
+                        if (inLink && runStart >= 0) g.DrawLine(linkPen, runStart, y + top + baseline, runEnd - 1, y + top + baseline);
+                        runStart = -1;
+                        x = 0;
+                        y += line;
+                    }
+                    TextRenderer.DrawText(g, word, Font, new Point(x, y + top), inLink ? t.Link : t.Text, TextFormatFlags.NoPadding);
+                    if (runStart < 0) runStart = x;
+                    runEnd = x + w;
                     x += w + space;
                 }
+                if (inLink && runStart >= 0) g.DrawLine(linkPen, runStart, y + top + baseline, runEnd - 1, y + top + baseline);
                 inLink = !inLink;
             }
             y += line;

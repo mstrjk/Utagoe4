@@ -22,7 +22,7 @@
 
     <AssemblyName>Utagoe</AssemblyName>
     <RootNamespace>Utagoe</RootNamespace>
-    <Version>4.0</Version>
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\VERSION').Trim())</Version>
     <Product>Utagoe</Product>
     <ApplicationIcon>Resources/Utagoe.ico</ApplicationIcon>
     <Description>Vocal extraction by instrumental subtraction</Description>
@@ -46,9 +46,6 @@
   <ItemGroup>
     <EmbeddedResource Include="Resources\*.bmp" LogicalName="Utagoe.Resources.%(Filename).bmp" />
     <EmbeddedResource Include="Resources\Utagoe.ico" LogicalName="Utagoe.Resources.Utagoe.ico" />
-    <!-- v4: About で選べる app icon の色違い (32-bit BMP、alpha 付き)。AppIcons が読む。 -->
-    <EmbeddedResource Include="Resources\Icons\*.bmp" LogicalName="Utagoe.Resources.Icons.%(Filename).bmp" />
-    <EmbeddedResource Include="Resources\Logos\*.bmp" LogicalName="Utagoe.Resources.Logos.%(Filename).bmp" />
     <EmbeddedResource Include="Resources\Lang\*.json" LogicalName="Utagoe.Resources.Lang.%(Filename).json" />
   </ItemGroup>
 

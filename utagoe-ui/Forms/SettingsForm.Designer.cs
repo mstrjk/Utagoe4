@@ -17,7 +17,8 @@ partial class SettingsForm
     private TabControl PageControl = null!;
 
     private VclRadioGroup IntroRadioGroup = null!;
-    private VclRadioGroup MergeRadioGroup = null!;
+    private VclRadioGroup MethodRadioGroup = null!;
+    private Label MethodNeedsLabel = null!;
     private VclRadioGroup SoundQtyGroup = null!;
     private VclRadioGroup LevelRadioGroup = null!;
     private RaisedLine Panel1 = null!;
@@ -62,6 +63,9 @@ partial class SettingsForm
     private ComboBox OutDepthCombo = null!;
     private ComboBox OutBitrateCombo = null!;
     private ComboBox OutKindCombo = null!;
+    private VclGroupBox FindWithinBox = null!;
+    private ComboBox RepeatGuideCombo = null!;
+    private ComboBox RepeatSearchCombo = null!;
 
     // 上の選択で使われなくなる部品を灰色にするため、field として持つ (v4)。
     private Label KvolCaption = null!;
@@ -89,7 +93,7 @@ partial class SettingsForm
         // 実機では system menu / minimize / maximize がなく、OK / Cancel だけで閉じる。DFM の既定値より実際の window style を優先する。
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(506, 337);
+        ClientSize = new Size(506, 359);
         Font = new Font("Tahoma", 9F);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         ControlBox = false;
@@ -97,31 +101,47 @@ partial class SettingsForm
         StartPosition = FormStartPosition.CenterScreen;
         Text = "Settings";
 
-        OkBitBtn = new BitBtn { Bounds = new Rectangle(308, 305, 89, 25), TabIndex = 0 };
+        OkBitBtn = new BitBtn { Bounds = new Rectangle(308, 327, 89, 25), TabIndex = 0 };
         OkBitBtn.SetKind(BitBtnKind.OK);
-        CanBitBtn = new BitBtn { Bounds = new Rectangle(409, 305, 89, 25), Text = "Cancel", TabIndex = 1 };
+        CanBitBtn = new BitBtn { Bounds = new Rectangle(409, 327, 89, 25), Text = "Cancel", TabIndex = 1 };
         CanBitBtn.SetKind(BitBtnKind.Cancel);
-        ResetButton = new BitBtn { Bounds = new Rectangle(200, 305, 75, 25), Text = "Reset", TabIndex = 3, UseVisualStyleBackColor = true };
+        ResetButton = new BitBtn { Bounds = new Rectangle(200, 327, 75, 25), Text = "Reset", TabIndex = 3, UseVisualStyleBackColor = true };
         AcceptButton = OkBitBtn;
         CancelButton = CanBitBtn;
 
-        PageControl = new ThemedTabControl { Bounds = new Rectangle(8, 8, 489, 291), TabIndex = 2 };
-        var tab1 = new TabPage("Processing Method") { UseVisualStyleBackColor = true };
+        PageControl = new ThemedTabControl { Bounds = new Rectangle(8, 8, 489, 313), TabIndex = 2, Multiline = true, SizeMode = TabSizeMode.FillToRight, MinRows = 2 };
+        var tab0 = new TabPage(App.Messages.MethodTab) { UseVisualStyleBackColor = true };
+        var tab1 = new TabPage("Processing") { UseVisualStyleBackColor = true };
         var tab2 = new TabPage("Advanced") { UseVisualStyleBackColor = true };
         var tab3 = new TabPage("Output") { UseVisualStyleBackColor = true };
         var tab4 = new TabPage(App.Messages.ModelTab) { UseVisualStyleBackColor = true };
         var tab5 = new TabPage(App.Messages.CentreTab) { UseVisualStyleBackColor = true };
-        PageControl.TabPages.AddRange(new[] { tab1, tab2, tab3, tab4, tab5 });
+        var tab6 = new TabPage(App.Messages.FindWithinGroup) { UseVisualStyleBackColor = true };
+        PageControl.TabPages.AddRange(new[] { tab0, tab1, tab2, tab3, tab4, tab5, tab6 });
+
+        MethodRadioGroup = MakeGroup("Extraction Method", 8, 8, 150, 140, 0,
+                                     "Frequency", "Waveform", "Centre + sides", "FindWithin");
+        MethodNeedsLabel = new ThemedLabel { Bounds = new Rectangle(166, 16, 300, 40) };
+        CentreRadioGroup = MakeGroup(App.Messages.CentreGroup, 8, 8, 464, 222, 0, App.Messages.CentreNames);
+        FindWithinBox = new VclGroupBox { Text = App.Messages.FindWithinGroup, Bounds = new Rectangle(8, 8, 306, 78), TabIndex = 0 };
+        var guideLabel = MakeLabel(App.Messages.RepeatGuideLabel, 10, 24);
+        RepeatGuideCombo = new ComboBox { Bounds = new Rectangle(84, 20, 210, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 0 };
+        RepeatGuideCombo.Items.AddRange(App.Messages.RepeatGuideNames);
+        var searchLabel = MakeLabel(App.Messages.RepeatSearchLabel, 10, 50);
+        RepeatSearchCombo = new ComboBox { Bounds = new Rectangle(84, 46, 210, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 1 };
+        RepeatSearchCombo.Items.AddRange(App.Messages.RepeatSearchNames);
+        FindWithinBox.Controls.AddRange(new Control[] { guideLabel, RepeatGuideCombo, searchLabel, RepeatSearchCombo });
+        tab0.Controls.AddRange(new Control[] { MethodRadioGroup, MethodNeedsLabel });
+        tab5.Controls.Add(CentreRadioGroup);
+        tab6.Controls.Add(FindWithinBox);
 
         IntroRadioGroup = MakeGroup("Intro Analysis", 8, 8, 120, 128, 0,
                                     "Automatic", "Normal", "Detailed", "None");
 
-        // Extraction Method frame は上下 2 領域に分け、各方式の option を対応する側へ配置する。
-        MergeRadioGroup = MakeGroup("Extraction Method", 135, 8, 338, 241, 2,
-                                    "Frequency", "Waveform");
+        var methodOptions = new VclGroupBox { Text = App.Messages.MethodOptions, Bounds = new Rectangle(135, 8, 338, 241), TabIndex = 2 };
 
-        SoundQtyGroup = MakeGroup("Accuracy Priority", 232, 24, 233, 88, 3, "Quality", "Extraction");
-        LevelRadioGroup = MakeGroup("Instrumental Level Adjustment", 232, 126, 233, 115, 5,
+        SoundQtyGroup = MakeGroup("Accuracy Priority", 144, 24, 321, 88, 3, "Quality", "Extraction");
+        LevelRadioGroup = MakeGroup("Instrumental Level Adjustment", 144, 126, 321, 115, 5,
                                     "Automatic (Averaged)", "Automatic (Adaptive)", "Manual", "None");
 
         Panel1 = new RaisedLine { Bounds = new Rectangle(144, 118, 322, 2) };
@@ -147,9 +167,9 @@ partial class SettingsForm
         {
             Panel1, KvolText, KvolCaption, KvolWeak, KvolStrong, KvolTrackBar,
             KlvlText, KlvlTrackBar, SoundQtyGroup, LevelRadioGroup,
-            IntroRadioGroup, AdptLvlGroupBox, MergeRadioGroup,
+            IntroRadioGroup, AdptLvlGroupBox, methodOptions,
         });
-        MergeRadioGroup.SendToBack();
+        methodOptions.SendToBack();
 
         DataRadioGroup = MakeGroup("Processing Mode", 8, 8, 102, 101, 0, "Normal", "L/R Difference", "Mono");
         PhaseRadioGroup = MakeGroup("Instrumental Phase", 8, 115, 102, 101, 1,
@@ -219,6 +239,7 @@ partial class SettingsForm
         outBox.Controls.AddRange(new Control[] { kindLabel, OutKindCombo, fmtLabel, OutFormatCombo, depthLabel, OutDepthCombo, rateLabel, OutBitrateCombo });
         tab3.Controls.Add(outBox);
 
+
         // GPU の group は v3 にない。Misc tab 下段の空きに、上の 2 group と同じ幅でまとめて置く。
         var gpuBox = new VclGroupBox { Text = App.Messages.GpuGroup, Bounds = new Rectangle(346, 152, 126, 102), TabIndex = 5 };
         GpuCheckBox = new ThemedCheckBox { Text = App.Messages.GpuUse, Bounds = new Rectangle(11, 16, 110, 17), TabIndex = 0 };
@@ -240,9 +261,6 @@ partial class SettingsForm
         KickDuckCheckBox = new ThemedCheckBox { Text = App.Messages.KickDuck, Bounds = new Rectangle(290, 213, 182, 17), TabIndex = 3 };
         tab4.Controls.AddRange(new Control[] { ModelRadioGroup, AlignRadioGroup, SpansBox, KickDuckCheckBox, modelNote });
 
-        CentreRadioGroup = MakeGroup(App.Messages.CentreGroup, 8, 8, 464, 222, 0, App.Messages.CentreNames);
-        var centreNote = new ThemedLabel { Text = App.Messages.CentreNote, Bounds = new Rectangle(10, 236, 460, 16) };
-        tab5.Controls.AddRange(new Control[] { CentreRadioGroup, centreNote });
 
         Controls.AddRange(new Control[] { OkBitBtn, CanBitBtn, PageControl, ResetButton });
 

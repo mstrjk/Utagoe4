@@ -21,6 +21,7 @@ partial class MainForm
     private TextBox Edit1 = null!;
     private TextBox Edit2 = null!;
     private TextBox Edit3 = null!;
+    private ThemedCheckBox OverwriteCheckBox = null!;
     private BitBtn BitBtn1 = null!;
     private BitBtn BitBtn2 = null!;
     private BitBtn BitBtn3 = null!;
@@ -74,12 +75,13 @@ partial class MainForm
         Edit1 = new TextBox { Bounds = new Rectangle(24, 48, 337, 20), TabIndex = 0, AllowDrop = true };
         Edit2 = new TextBox { Bounds = new Rectangle(24, 120, 337, 20), TabIndex = 3, AllowDrop = true };
         Edit3 = new TextBox { Bounds = new Rectangle(24, 208, 337, 20), TabIndex = 6, AllowDrop = true };
+        OverwriteCheckBox = new ThemedCheckBox { Text = App.Messages.OverwriteFiles, Bounds = new Rectangle(24, 236, 337, 17), TabIndex = 8 };
 
-        BitBtn1  = MakeGlyphButton("BitBtn1",  376, 46,  1);
-        PlayBtn1 = MakeGlyphButton("PlayBtn1", 416, 46,  2);
-        BitBtn2  = MakeGlyphButton("BitBtn2",  376, 118, 4);
-        PlayBtn2 = MakeGlyphButton("PlayBtn2", 416, 118, 5);
-        BitBtn3  = MakeGlyphButton("BitBtn3",  376, 206, 7);
+        BitBtn1  = MakeGlyphButton("folder",   376, 46,  1);
+        PlayBtn1 = MakeGlyphButton("play",     416, 46,  2);
+        BitBtn2  = MakeGlyphButton("folder",   376, 118, 4);
+        PlayBtn2 = MakeGlyphButton("play",     416, 118, 5);
+        BitBtn3  = MakeGlyphButton("folder",   376, 206, 7);
         // v4: 出力欄は folder なので、v3 の出力の再生 button (PlayBtn3) は置かない。
 
         // ParentFont=False の control も VCL と同様に font scaling される。
@@ -92,7 +94,7 @@ partial class MainForm
             Bounds = new Rectangle(464, 152, 89, 25), Text = "Settings...", TabIndex = 10,
             Spacing = 6,
         };
-        SetBitBtn.SetGlyph("SetBitBtn");
+        SetBitBtn.SetGlyph("settings");
 
         HelpBtn = new BitBtn
         {
@@ -101,14 +103,14 @@ partial class MainForm
         HelpBtn.SetKind(BitBtnKind.Help);
 
         AboutBtn = new BitBtn { Bounds = new Rectangle(464, 232, 25, 25), TabIndex = 12 };
-        AboutBtn.SetGlyph("AboutBtn");
+        AboutBtn.SetGlyph("info");
         Hints.SetToolTip(AboutBtn, "Version Info");
 
         CloseBtn = new BitBtn
         {
             Bounds = new Rectangle(490, 232, 63, 25), Text = "Quit", TabIndex = 13, Spacing = 5,
         };
-        CloseBtn.SetGlyph("CloseBtn");
+        CloseBtn.SetGlyph("close");
 
         // 角の 8x8 panel はほぼ見えないが、double-click で debug mode を切り替える hidden control。
         DbgPanel = new Panel { Bounds = new Rectangle(9, 256, 8, 8), TabIndex = 15, TabStop = false };
@@ -116,7 +118,7 @@ partial class MainForm
         Controls.AddRange(new Control[]
         {
             Label1, Label2, Label3, WformLbl1, WformLbl2, InfoLabel, ProgBar1,
-            Edit1, BitBtn1, PlayBtn1, Edit2, BitBtn2, PlayBtn2, Edit3, BitBtn3,
+            Edit1, BitBtn1, PlayBtn1, Edit2, BitBtn2, PlayBtn2, Edit3, BitBtn3, OverwriteCheckBox,
             StartBtn, SetBitBtn, HelpBtn, AboutBtn, CloseBtn, DbgPanel,
         });
 

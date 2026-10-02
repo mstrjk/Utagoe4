@@ -60,7 +60,7 @@ internal static class AppIcons
     private static Bitmap Source(string name)
     {
         if (Sources.TryGetValue(name, out var bmp)) return bmp;
-        return Sources[name] = Vcl.VclGlyph.LoadAlpha($"Icons.{name}");
+        return Sources[name] = Vcl.VclGlyph.AppIconArt(name);
     }
 
     private static Bitmap Scale(Bitmap src, int size)

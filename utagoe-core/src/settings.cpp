@@ -104,10 +104,13 @@ bool Settings::load(const std::string& path) {
     outputBitrate = getInt(out, "Bitrate", outputBitrate);
     {
         const int k = getInt(out, "Kind", static_cast<int>(outputKind));
-        outputKind = (k >= 0 && k <= 2) ? static_cast<OutputKind>(k) : OutputKind::Vocal;
+        outputKind = (k >= 0 && k <= 3) ? static_cast<OutputKind>(k) : OutputKind::Vocal;
     }
     centerMethod  = std::clamp(getInt(out, "CentreMethod", centerMethod), 0, 6);
+    repeatGuide   = std::clamp(getInt(out, "RepeatGuide", repeatGuide), 0, 2);
+    repeatBreadth = std::clamp(getInt(out, "RepeatBreadth", repeatBreadth), 0, 1);
     outputFolder  = getStr(out, "Folder", outputFolder);
+    overwriteOutput = getBool(out, "Overwrite", overwriteOutput);
 
     useGpu          = getBool(gpu, "Use", useGpu);
     gpuMode         = static_cast<GpuMode>(getInt(gpu, "Mode", static_cast<int>(gpuMode)) == 1 ? 1 : 0);
@@ -160,7 +163,10 @@ bool Settings::save(const std::string& path) const {
     o << "Bitrate="   << outputBitrate                  << "\r\n";
     o << "Kind="      << static_cast<int>(outputKind)   << "\r\n";
     o << "CentreMethod=" << centerMethod                << "\r\n";
+    o << "RepeatGuide=" << repeatGuide                  << "\r\n";
+    o << "RepeatBreadth=" << repeatBreadth              << "\r\n";
     o << "Folder="    << outputFolder                   << "\r\n";
+    o << "Overwrite=" << (overwriteOutput ? 1 : 0)      << "\r\n";
     o << "\r\n[" << kGpuSection << "]\r\n";
     o << "Use="        << (useGpu ? 1 : 0)             << "\r\n";
     o << "Mode="       << static_cast<int>(gpuMode)    << "\r\n";

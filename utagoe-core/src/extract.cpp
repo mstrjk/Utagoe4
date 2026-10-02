@@ -3,11 +3,12 @@
 // 内部は int16 scale (full scale = 32768)。
 
 #include "utagoe.h"
-#include "engine.h"
+#include "algorithms/v3/engine.h"
 #include "gpu.h"
-#include "refcancel/rc.h"
-#include "hardpair/hp.h"
-#include "centresides/cs.h"
+#include "algorithms/refcancel/rc.h"
+#include "algorithms/hardpair/hp.h"
+#include "algorithms/centresides/cs.h"
+#include "algorithms/findwithin/fw.h"
 #include "parallel.h"
 #include "log.h"
 
@@ -845,7 +846,7 @@ void alignedPairPaths(const std::string& output, std::string& mainPath, std::str
 }
 
 void outputPaths(const std::string& output, OutputKind kind, std::string& first, std::string& second) {
-    if (kind != OutputKind::CenterSides) {
+    if (kind != OutputKind::CenterSides && kind != OutputKind::Repeats) {
         alignedPairPaths(output, first, second);
         return;
     }
@@ -854,6 +855,11 @@ void outputPaths(const std::string& output, OutputKind kind, std::string& first,
     const bool hasExt = dot != std::string::npos && (slash == std::string::npos || dot > slash);
     const std::string stem = hasExt ? output.substr(0, dot) : output;
     const std::string ext = hasExt ? output.substr(dot) : "";
+    if (kind == OutputKind::Repeats) {
+        first = stem + "_repeats";
+        second = first + (slash == std::string::npos ? std::string("/") : output.substr(slash, 1)) + "repeats.csv";
+        return;
+    }
     first = stem + "_centre" + ext;
     second = stem + "_sides" + ext;
 }
@@ -910,6 +916,131 @@ ExtractResult extractCenterSides(const AudioBuffer& original, const Settings& se
     char buf[160];
     std::snprintf(buf, sizeof buf, "centre/sides:%s centre:%.1fdB sides:%.1fdB mask:%.3f", cs::methodName(method), db(ce), db(se), s.maskMean);
     res.alignment.model = buf;
+    if (progress) progress(1.0f, progressUser);
+    return res;
+}
+
+namespace {
+
+std::string clockLabel(double seconds) {
+    const double s = std::max(0.0, seconds);
+    const int m = static_cast<int>(s / 60);
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%dm%05.2fs", m, s - 60.0 * m);
+    return buf;
+}
+
+AudioBuffer toBuffer(const fw::Audio& a, int sr) {
+    AudioBuffer b;
+    b.sampleRate = sr;
+    b.channels = a.channels;
+    b.samples.resize(a.v.size());
+    for (std::size_t i = 0; i < a.v.size(); ++i) b.samples[i] = static_cast<float>(a.v[i]);
+    return b;
+}
+
+}
+
+RepeatsResult extractRepeats(const AudioBuffer& original, const Settings& settings, const std::function<bool(RepeatClip&)>& sink,
+                             ProgressFn progress, void* progressUser) {
+    RepeatsResult res;
+    if (original.frames() == 0) {
+        res.error = "the original input is empty";
+        return res;
+    }
+    const int sr = original.sampleRate;
+    const int ch = std::min(original.channels, 2);
+    const std::size_t frames = original.frames();
+    fw::Audio a;
+    a.channels = ch;
+    a.v.resize(frames * static_cast<std::size_t>(ch));
+    for (std::size_t i = 0; i < frames; ++i)
+        for (int c = 0; c < ch; ++c) a.at(i, c) = original.samples[i * static_cast<std::size_t>(original.channels) + static_cast<std::size_t>(c)];
+    if (original.channels > 2) log::detail("  using the first two of %d channels", original.channels);
+    fw::Config cfg;
+    static const char* guides[] = {"auto", "full", "side"};
+    cfg.guide = guides[std::clamp(settings.repeatGuide, 0, 2)];
+    if (ch < 2 && cfg.guide == "side") cfg.guide = "full";
+    if (settings.repeatBreadth == 1) {
+        cfg.maxMatches = 400;
+        cfg.renderLimit = 120;
+    }
+    log::Stage st("repeats (" + cfg.guide + (settings.repeatBreadth == 1 ? ", broad" : "") + ")");
+    bool cancelled = false, failed = false;
+    int passed = 0;
+    auto report = [&](double f, const std::string&) {
+        log::status(1, false, "  %s", log::progressBar(f).c_str());
+        if (failed || (progress && !progress(static_cast<float>(f), progressUser))) cancelled = true;
+        return !cancelled;
+    };
+    auto emit = [&](RepeatClip& clip) {
+        if (clip.passed) {
+            ++passed;
+            char num[16];
+            std::snprintf(num, sizeof num, "%02d_", passed);
+            clip.name = num + clip.name;
+            if (!failed && sink && !sink(clip)) failed = true;
+        }
+        clip.shared = AudioBuffer();
+        clip.difference = AudioBuffer();
+        res.clips.push_back(std::move(clip));
+    };
+    fw::Outcome o;
+    try {
+        o = fw::run(a, sr, cfg, report,
+                    [&](const fw::Match& m, fw::Extraction& x) {
+                        RepeatClip c;
+                        c.name = clockLabel(m.target) + "_from_" + clockLabel(m.source);
+                        c.status = x.status;
+                        c.quality = x.quality;
+                        c.guide = x.guide;
+                        c.source = m.source;
+                        c.target = m.target;
+                        c.duration = static_cast<double>(x.target.frames()) / sr;
+                        c.reductionDb = x.heldOut.reductionDb;
+                        c.correlation = x.heldOut.correlation;
+                        c.delayMs = x.delaySamples * 1000.0 / sr;
+                        c.ratePpm = x.ratePpm;
+                        c.passed = x.status == "validated_contrast" || x.status == "near_null_repeat";
+                        if (c.passed) {
+                            c.shared = toBuffer(x.shared, sr);
+                            c.difference = toBuffer(x.residual, sr);
+                        }
+                        emit(c);
+                    },
+                    [&](fw::JointResult& j) {
+                        RepeatClip c;
+                        c.joint = true;
+                        c.name = clockLabel(j.targetStart) + "_joint";
+                        for (const std::string& s : j.sources) c.name += "_" + s.substr(6);
+                        c.status = j.accepted ? "validated_joint_contrast" : "joint_not_demonstrably_better";
+                        c.quality = j.accepted ? "joint" : "not_verified";
+                        c.target = j.targetStart;
+                        c.duration = j.duration;
+                        c.reductionDb = j.heldOut.reductionDb;
+                        c.correlation = j.heldOut.correlation;
+                        c.passed = j.accepted;
+                        if (c.passed) {
+                            c.shared = toBuffer(j.shared, sr);
+                            c.difference = toBuffer(j.residual, sr);
+                        }
+                        emit(c);
+                    });
+    } catch (const std::exception& e) {
+        log::clearStatus(1);
+        if (failed) return res;
+        res.error = std::string("repeat search failed: ") + e.what();
+        return res;
+    }
+    log::clearStatus(1);
+    if (failed) return res;
+    if (o.cancelled || cancelled) {
+        res.cancelled = true;
+        return res;
+    }
+    res.regions = static_cast<int>(o.matches.size());
+    for (const std::string& e : o.errors) log::detail("  skipped %s", e.c_str());
+    log::detail("  %d regions checked, %d passed the cancellation test", res.regions, passed);
     if (progress) progress(1.0f, progressUser);
     return res;
 }

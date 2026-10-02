@@ -90,6 +90,11 @@ typedef struct UtagoeSettings {
     int32_t centerMethod;
 
     char    uiLanguage[UTAGOE_NAME_MAX];
+
+    int32_t repeatGuide;
+    int32_t repeatBreadth;
+
+    int32_t overwriteOutput;
 } UtagoeSettings;
 
 // debug には元実装のデバッグ表示と同じ形式の行を入れる。

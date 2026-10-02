@@ -87,7 +87,7 @@ internal sealed class AboutForm : Form
 
         _ver = new Label
         {
-            Text = L.F("Version {0}", "4.0"),
+            Text = L.F("Version {0}", Program.Version),
             Location = new Point(166, 80),
             AutoSize = true,
             Font = new Font("Tahoma", 12F),
@@ -183,7 +183,7 @@ internal sealed class AboutForm : Form
     {
         if (IsDisposed) return;
         _credit.Text = Credit;
-        _ver.Text = L.F("Version {0}", "4.0");
+        _ver.Text = L.F("Version {0}", Program.Version);
         _ackPanel.Controls.Clear();
         FillAcks();
         foreach (var c in _iconChoices) _tips.SetToolTip(c, AppIcons.DisplayName(c.IconName));

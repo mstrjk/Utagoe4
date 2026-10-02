@@ -7,7 +7,7 @@
 #include "freq_engine.h"
 #include "../src/gpu.h"
 #include "../src/log.h"
-#include "../src/hardpair/hp.h"
+#include "../src/algorithms/hardpair/hp.h"
 #include "utagoe.h"
 #include "vocal_func.h"
 
@@ -1376,6 +1376,119 @@ void testCenterSides() {
     fs::remove(fs::u8path(path));
 }
 
+void testRepeats() {
+    say("Repeats\n");
+    const int rate = 22050;
+    const double phrase = 3.0;
+    const std::size_t pn = static_cast<std::size_t>(phrase * rate);
+    unsigned state = 12345;
+    auto noise = [&]() {
+        state = state * 1664525u + 1013904223u;
+        return static_cast<double>(state >> 8) / 16777216.0 * 2.0 - 1.0;
+    };
+    auto makePhrase = [&](const double* notes, int count, double width) {
+        std::vector<double> p(pn * 2, 0.0);
+        for (std::size_t f = 0; f < pn; ++f) {
+            const double t = static_cast<double>(f) / rate;
+            const int k = std::min(count - 1, static_cast<int>(t / (phrase / count)));
+            const double local = t - k * (phrase / count);
+            const double env = std::exp(-4.0 * local);
+            const double tone = 0.25 * env * std::sin(2 * PI * notes[k] * t) + 0.08 * env * std::sin(2 * PI * 2 * notes[k] * t);
+            const double hit = local < 0.03 ? 0.3 * noise() * (1 - local / 0.03) : 0.0;
+            p[f * 2] = tone + hit + 0.01 * noise();
+            p[f * 2 + 1] = (1 - width) * tone + hit * 0.7 + 0.01 * noise();
+        }
+        return p;
+    };
+    const double a[] = {220, 277, 330, 247, 196, 294};
+    const double b[] = {175, 392, 262, 349, 233, 311};
+    const std::vector<double> pa = makePhrase(a, 6, 0.4), pb = makePhrase(b, 6, 0.1), pc = makePhrase(b + 1, 5, 0.6);
+    const std::vector<const std::vector<double>*> layout = {&pa, &pb, &pa, &pc, &pb};
+    AudioBuffer in;
+    in.sampleRate = rate;
+    in.channels = 2;
+    in.samples.resize(pn * 2 * layout.size());
+    std::vector<double> added(pn * 2, 0.0);
+    for (std::size_t f = 0; f < pn; ++f) {
+        const double t = static_cast<double>(f) / rate;
+        added[f * 2] = 0.12 * std::sin(2 * PI * 523.25 * t) * (0.6 + 0.4 * std::sin(2 * PI * 3 * t));
+        added[f * 2 + 1] = 0.5 * added[f * 2];
+    }
+    for (std::size_t s = 0; s < layout.size(); ++s)
+        for (std::size_t i = 0; i < pn * 2; ++i)
+            in.samples[s * pn * 2 + i] = static_cast<float>((*layout[s])[i] + (s == 2 ? added[i] : 0.0));
+    Settings st;
+    st.outputKind = OutputKind::Repeats;
+    int written = 0;
+    double bestReduction = -1e9, bestAdded = 0, bestLeft = 1e9;
+    const RepeatsResult r = extractRepeats(in, st, [&](RepeatClip& c) {
+        ++written;
+        const bool sameLag = std::abs((c.target - c.source) - 2 * phrase) < 0.1 && !c.joint;
+        const bool coversAdded = c.target < 2 * phrase + 0.5 && c.target + c.duration > 3 * phrase - 0.5;
+        if (sameLag && coversAdded && c.shared.channels == 2 && c.difference.samples.size() == c.shared.samples.size()) {
+            const std::size_t off = static_cast<std::size_t>(std::llround((c.target - 2 * phrase) * rate));
+            double da = 0, aa = 0, ee = 0;
+            for (std::size_t f = 0; f < c.difference.frames(); ++f)
+                for (int ch = 0; ch < 2; ++ch) {
+                    const std::size_t i = (off + f) * 2 + static_cast<std::size_t>(ch);
+                    if (i >= added.size()) continue;
+                    const double d = c.difference.samples[f * 2 + static_cast<std::size_t>(ch)];
+                    da += d * added[i];
+                    aa += added[i] * added[i];
+                    ee += (d - added[i]) * (d - added[i]);
+                }
+            if (c.reductionDb > bestReduction) {
+                bestReduction = c.reductionDb;
+                bestAdded = da / std::max(aa, 1e-30);
+                bestLeft = 10 * std::log10(std::max(ee, 1e-30) / std::max(aa, 1e-30));
+            }
+        }
+        return true;
+    });
+    int passed = 0;
+    for (const RepeatClip& c : r.clips) passed += c.passed;
+    say("    %d regions checked, %d passed, %d written; repeat of phrase A: held-out reduction %.2f dB, added line kept %.3f, difference minus added line %.1f dB\n",
+        static_cast<int>(r.clips.size()), passed, written, bestReduction, bestAdded, bestLeft);
+    check(r && passed == written && written > 0, "repeats finds and writes verified clips");
+    check(bestReduction > 0.5 && bestLeft < -20, "the repeated phrase cancels against its earlier copy");
+    check(std::abs(bestAdded - 1.0) < 0.2, "the new line stays in the difference");
+
+    AudioBuffer mono;
+    mono.sampleRate = rate;
+    mono.channels = 1;
+    mono.samples.resize(in.frames());
+    for (std::size_t f = 0; f < in.frames(); ++f) mono.samples[f] = in.samples[f * 2];
+    Settings ms;
+    ms.outputKind = OutputKind::Repeats;
+    ms.repeatGuide = 2;
+    int monoWritten = 0;
+    const RepeatsResult mr = extractRepeats(mono, ms, [&](RepeatClip& c) { monoWritten += c.shared.channels == 1; return true; });
+    check(mr && monoWritten > 0, "repeats works on mono with the side guide falling back to full");
+
+    AudioBuffer quiet;
+    quiet.sampleRate = rate;
+    quiet.channels = 2;
+    quiet.samples.assign(static_cast<std::size_t>(rate) * 2, 0.0f);
+    const RepeatsResult qr = extractRepeats(quiet, st, nullptr);
+    check(qr && qr.clips.empty(), "repeats on silence finds nothing and does not fail");
+
+    std::string p1, p2;
+    outputPaths("C:/x/song.flac", OutputKind::Repeats, p1, p2);
+    check(p1 == "C:/x/song_repeats" && p2 == "C:/x/song_repeats/repeats.csv", "repeats folder names");
+
+    Settings w;
+    w.outputKind = OutputKind::Repeats;
+    w.repeatGuide = 2;
+    w.repeatBreadth = 1;
+    w.overwriteOutput = true;
+    const std::string path = tempPath("fw.ini");
+    w.save(path);
+    Settings rr;
+    rr.load(path);
+    check(rr.outputKind == OutputKind::Repeats && rr.repeatGuide == 2 && rr.repeatBreadth == 1 && rr.overwriteOutput, "repeats and overwrite settings round-trip");
+    fs::remove(fs::u8path(path));
+}
+
 void testLongPaths() {
     say("Paths longer than 260 characters\n");
     fs::path dir = fs::u8path(tempPath("long"));
@@ -1442,6 +1555,7 @@ int runAll() {
     testWaveModels();
     testKickDuck();
     testCenterSides();
+    testRepeats();
     testExtract();
     testAlignedPair();
     testLegacyBitExact();

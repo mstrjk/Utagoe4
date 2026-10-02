@@ -13,6 +13,7 @@ internal sealed class BitBtn : Button
 {
     private Bitmap? _glyph;
     private Bitmap? _glyphDisabled;
+    private string? _role;
     private bool _pressed;
     private bool _hot;
 
@@ -35,16 +36,17 @@ internal sealed class BitBtn : Button
         UseVisualStyleBackColor = true;
     }
 
-    /// embedded bitmap を NumGlyphs の規則で分割して glyph に使う。
-    public void SetGlyph(string resource, int numGlyphs = 2)
+    public void SetGlyph(string role)
     {
-        (_glyph, _glyphDisabled) = VclGlyph.LoadPair(resource, numGlyphs);
+        _role = role;
+        VclGlyph.Button(role);
         Invalidate();
     }
 
     /// TMediaPlayer の enabled / disabled glyph を別 image として設定できる。
     public void SetGlyphs(Bitmap enabled, Bitmap? disabled)
     {
+        _role = null;
         _glyph = enabled;
         _glyphDisabled = disabled;
         Invalidate();
@@ -56,17 +58,17 @@ internal sealed class BitBtn : Button
         switch (kind)
         {
             case BitBtnKind.OK:
-                SetGlyph("BBOK");
+                SetGlyph("check");
                 if (string.IsNullOrEmpty(Text)) Text = "OK";
                 DialogResult = DialogResult.OK;
                 break;
             case BitBtnKind.Cancel:
-                SetGlyph("BBCANCEL");
+                SetGlyph("x");
                 if (string.IsNullOrEmpty(Text)) Text = "Cancel";
                 DialogResult = DialogResult.Cancel;
                 break;
             case BitBtnKind.Help:
-                SetGlyph("BBHELP");
+                SetGlyph("question");
                 if (string.IsNullOrEmpty(Text)) Text = "&Help";
                 break;
         }
@@ -111,6 +113,7 @@ internal sealed class BitBtn : Button
                 g.DrawRectangle(hp, Rectangle.Inflate(box, -1, -1));
             }
 
+        if (_role != null) (_glyph, _glyphDisabled) = VclGlyph.Button(_role);
         var glyph = Enabled ? _glyph : (_glyphDisabled ?? _glyph);
         string text = Text ?? "";
         var flags = TextFormatFlags.SingleLine | TextFormatFlags.NoPadding;

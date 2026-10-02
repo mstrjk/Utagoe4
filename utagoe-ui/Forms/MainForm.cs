@@ -46,8 +46,20 @@ internal sealed partial class MainForm : Form
         BitBtn3.Click += BitBtn3Click;
         PlayBtn1.Click += (_, _) => Play(Edit1.Text);
         PlayBtn2.Click += (_, _) => Play(Edit2.Text);
+        Edit1.TextChanged += (_, _) => UpdatePlayButtons();
+        Edit2.TextChanged += (_, _) => UpdatePlayButtons();
         Edit3.Text = FileNaming.Clean(OutputFolder);
         Edit3.Leave += (_, _) => RememberFolder(Edit3.Text.Trim());
+        OverwriteCheckBox.Checked = _settings.Values.OverwriteOutput != 0;
+        OverwriteCheckBox.CheckedChanged += (_, _) =>
+        {
+            int value = OverwriteCheckBox.Checked ? 1 : 0;
+            if (_settings.Values.OverwriteOutput == value) return;
+            var v = _settings.Values;
+            v.OverwriteOutput = value;
+            _settings.Values = v;
+            _settings.Save();
+        };
 
         // DFM 上では Edit1 / Edit3 が同じ KeyPress handler、Edit2 は別 handler。
         Edit1.KeyPress += Edit1KeyPress;
@@ -111,7 +123,7 @@ internal sealed partial class MainForm : Form
     private string OutputFileFor(string original, string folder)
     {
         string suffix = _settings.Values.OutputKind == 1 ? Messages.PairSuffix
-                      : _settings.Values.OutputKind == 2 ? ""
+                      : _settings.Values.OutputKind is 2 or 3 ? ""
                       : _settings.Values.AutoNameOutput != 0 ? _settings.Values.OutputSuffix : "";
         string name = Path.GetFileName(FileNaming.AutoOutputName(original, suffix,
                                        Core.FormatExtension((OutputFormat)_settings.Values.OutputFormat)));
@@ -283,6 +295,7 @@ internal sealed partial class MainForm : Form
         }
         LogHub.Line(rc switch
         {
+            0 when settings.OutputKind == 3 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {Core.OutputPaths(output, 3).First} ({result.Debug})",
             0 when settings.OutputKind is 1 or 2 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {Core.OutputPaths(output, settings.OutputKind).First} + {Core.OutputPaths(output, settings.OutputKind).Second}",
             0 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {output}",
             4 => "cancelled",
@@ -296,6 +309,8 @@ internal sealed partial class MainForm : Form
             if (result.GpuUsed != 0) note = (note.Length > 0 ? note + "\n" : "") + Messages.GpuUsed(result.GpuAdapter);
             Hints.SetToolTip(InfoLabel, note);
             if (_debugMode) ReportDebug(output, result);
+            if (settings.OutputKind == 3 && result.Debug.EndsWith(" 0 passed", StringComparison.Ordinal))
+                Utagoe.Forms.MessageForm.Show(this, Messages.NoRepeats, Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         else if (rc == 4)
         {
@@ -331,7 +346,7 @@ internal sealed partial class MainForm : Form
     private bool ValidateInputs(string original, string instrumental, string folder, out string output)
     {
         output = "";
-        bool split = _settings.Values.OutputKind == 2;
+        bool split = _settings.Values.OutputKind is 2 or 3;
         if (split && (original.Length == 0 || folder.Length == 0))
             return Fail(Messages.NeedOriginal);
         if (!split && (original.Length == 0 || instrumental.Length == 0 || folder.Length == 0))
@@ -362,7 +377,35 @@ internal sealed partial class MainForm : Form
         if (!split && !Core.TryProbeAudio(instrumental, out _, out string e2))
             return Fail(Messages.Unreadable("instrumental", e2));
 
+        if (_settings.Values.OverwriteOutput == 0 && Written(output).FirstOrDefault(Taken) is { } existing)
+        {
+            var answer = Utagoe.Forms.MessageForm.Show(this, Messages.OverwritePrompt(Path.GetFileName(existing)), Messages.Title,
+                                                       MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (answer != DialogResult.Yes) output = NextFree(output);
+        }
+
         return true;
+
+        IEnumerable<string> Written(string path)
+        {
+            int kind = _settings.Values.OutputKind;
+            if (kind == 0) return new[] { path };
+            var (first, second) = Core.OutputPaths(path, kind);
+            return kind == 3 ? new[] { first } : new[] { first, second };
+        }
+
+        static bool Taken(string path) => File.Exists(path) || Directory.Exists(path);
+
+        string NextFree(string path)
+        {
+            string dir = Path.GetDirectoryName(path) ?? "";
+            string stem = Path.GetFileNameWithoutExtension(path), ext = Path.GetExtension(path);
+            for (int n = 1; ; n++)
+            {
+                string candidate = Path.Combine(dir, $"{stem}{n:00}{ext}");
+                if (!Written(candidate).Any(Taken)) return candidate;
+            }
+        }
 
         bool Fail(string msg)
         {
@@ -384,9 +427,23 @@ internal sealed partial class MainForm : Form
 
     private void ApplyOutputKind()
     {
-        bool needsInstrumental = _settings.Values.OutputKind != 2;
-        foreach (Control c in new Control[] { Label2, Edit2, BitBtn2, PlayBtn2 })
+        bool needsInstrumental = _settings.Values.OutputKind is not (2 or 3);
+        foreach (Control c in new Control[] { Label2, Edit2, BitBtn2 })
             c.Enabled = needsInstrumental && !IsRunning;
+        UpdatePlayButtons();
+    }
+
+    private void UpdatePlayButtons()
+    {
+        static bool Playable(string text)
+        {
+            string path = FileNaming.Clean(text.Trim());
+            try { return path.Length > 0 && File.Exists(path); }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException) { return false; }
+        }
+        bool needsInstrumental = _settings.Values.OutputKind is not (2 or 3);
+        PlayBtn1.Enabled = !IsRunning && Playable(Edit1.Text);
+        PlayBtn2.Enabled = !IsRunning && needsInstrumental && Playable(Edit2.Text);
     }
 
     private void SetRunning(bool running)
@@ -394,7 +451,7 @@ internal sealed partial class MainForm : Form
         StartBtn.Text = running ? Messages.Running : Messages.Start;
 
         foreach (Control c in new Control[]
-                 { Edit1, Edit2, Edit3, BitBtn1, BitBtn2, BitBtn3,
+                 { Edit1, Edit2, Edit3, BitBtn1, BitBtn2, BitBtn3, OverwriteCheckBox,
                    PlayBtn1, PlayBtn2, SetBitBtn })
             c.Enabled = !running;
         if (!running) ApplyOutputKind();

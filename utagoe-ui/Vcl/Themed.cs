@@ -244,6 +244,85 @@ internal sealed class ThemedTabControl : TabControl
     }
 
     protected override void OnSelectedIndexChanged(EventArgs e) { Invalidate(); base.OnSelectedIndexChanged(e); }
+
+    public override Rectangle DisplayRectangle
+    {
+        get
+        {
+            Rectangle r = base.DisplayRectangle;
+            if (!Multiline || !IsHandleCreated || TabCount == 0) return r;
+            int tabsBottom = 0;
+            for (int i = 0; i < TabCount; i++) tabsBottom = Math.Max(tabsBottom, GetTabRect(i).Bottom);
+            int top = tabsBottom + 1;
+            return Rectangle.FromLTRB(r.Left, top, r.Right, r.Bottom);
+        }
+    }
+
+    private bool _fitQueued;
+    private IntPtr _hfont;
+    private Font? _hfontSource;
+
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); _fitQueued = false; QueueFit(); }
+    protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); QueueFit(); }
+    protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); QueueFit(); }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (_hfont != IntPtr.Zero) { DeleteObject(_hfont); _hfont = IntPtr.Zero; }
+        base.Dispose(disposing);
+    }
+
+    private int _minRows = 1;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public int MinRows
+    {
+        get => _minRows;
+        set
+        {
+            if (_minRows == value) return;
+            _minRows = value;
+            QueueFit();
+        }
+    }
+
+    private void SetTabPadding(int x)
+    {
+        SendMessage(Handle, 0x132B, IntPtr.Zero, (IntPtr)((Padding.Y << 16) | (x & 0xFFFF)));
+        IntPtr old = _hfont;
+        _hfont = Font.ToHfont();
+        SendMessage(Handle, 0x0030, _hfont, (IntPtr)1);
+        if (old != IntPtr.Zero) DeleteObject(old);
+    }
+
+    [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr h, int msg, IntPtr w, IntPtr l);
+    [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr o);
+
+    private void QueueFit()
+    {
+        if (!Multiline || !IsHandleCreated || _fitQueued) return;
+        _fitQueued = true;
+        BeginInvoke(() =>
+        {
+            _fitQueued = false;
+            if (IsDisposed) return;
+            if (!ReferenceEquals(_hfontSource, Font))
+            {
+                IntPtr old = _hfont;
+                _hfont = Font.ToHfont();
+                _hfontSource = Font;
+                if (old != IntPtr.Zero) DeleteObject(old);
+            }
+            int pad = Padding.X;
+            SetTabPadding(pad);
+            while (RowCount < MinRows && pad < 400)
+                SetTabPadding(pad += 2);
+            Rectangle page = DisplayRectangle;
+            foreach (TabPage p in TabPages)
+                if (p.Bounds != page) p.Bounds = page;
+            Invalidate();
+        });
+    }
 }
 
 internal sealed class ThemedProgressBar : ProgressBar

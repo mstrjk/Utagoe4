@@ -108,9 +108,13 @@ internal static class Messages
     // 出力するもの (v3 にない)。揃えた組は出力欄の名前に _main / _inst を付けた 2 ファイル。
     public static string OutputGroup => L.T("Output");
     public static string OutputKindLabel => L.T("Save:");
-    public static string[] OutputKindNames => L.A( "Vocals", "Aligned pair", "Centre + sides"
+    public static string[] OutputKindNames => L.A( "Vocals", "Aligned pair"
     );
+    public static string MethodTab => L.T("Method");
     public static string CentreTab => L.T("Centre / Sides");
+    public static string MethodOptions => L.T("Method Options");
+    public static string NeedsBoth => L.T("Needs the original and its instrumental.");
+    public static string NeedsOriginal => L.T("Only the original is needed.");
     public static string CentreGroup => L.T("Centre / Sides Method");
     public static string[] CentreNames => L.A(
         "True M/S: exact mid and side, no guessing",
@@ -121,7 +125,16 @@ internal static class Messages
         "PCA: dominant centred component",
         "Pretty: softest, fewest artifacts"
     );
-    public static string CentreNote => L.T("Used when Save is set to Centre + sides. Only the original is needed.");
+    public static string FindWithinGroup => L.T("FindWithin");
+    public static string RepeatGuideLabel => L.T("Guide:");
+    public static string[] RepeatGuideNames => L.A( "Auto", "Full mix", "Side (L-R)"
+    );
+    public static string RepeatSearchLabel => L.T("Search:");
+    public static string[] RepeatSearchNames => L.A( "Normal", "Broad (slower)"
+    );
+    public static string OverwriteFiles => L.T("Overwrite existing files");
+    public static string OverwritePrompt(string name) => L.F("Do you want to overwrite {0}?", name);
+    public static string NoRepeats => L.T("No repeated passage passed the cancellation test, so no audio was saved. repeats.csv lists every passage that was checked.");
     public const string PairSuffix      = "_aligned";
 
     // (?) で出す説明 (v4)。内容は core の実装 (engine.cpp / freq_engine.cpp / extract.cpp) に合わせている。
@@ -141,7 +154,10 @@ internal static class Messages
             "Frequency: compares the two in the frequency domain and removes what the instrumental covers. " +
             "More forgiving when the instrumental isn't an exact match.\n\n" +
             "Waveform: subtracts the lined-up instrumental sample by sample. " +
-            "Cleanest when the instrumental is the exact same mix.");
+            "Cleanest when the instrumental is the exact same mix.\n\n" +
+            "Centre + sides: no instrumental needed. Splits the original into what sits in the centre and everything else.\n\n" +
+            "FindWithin: no instrumental needed. Finds passages that repeat within the original and saves " +
+            "what each repeat shares with its earlier copy and what changed.");
         public static string Accuracy => L.T("Accuracy Priority (Frequency)\n" +
             "Quality: a frequency is removed only when the instrumental is stronger there and its phase matches. Keeps the vocal cleaner.\n\n" +
             "Extraction: removed whenever the instrumental is stronger. Removes more instrumental, but can thin the vocal.");
@@ -178,9 +194,7 @@ internal static class Messages
             "Save - Aligned pair: no extraction. Saves the original (_main) and the instrumental lined up to it " +
             "in time and polarity (_inst), with the same length, rate and channels. Levels are left untouched. " +
             "The Alignment choice on the Waveform Algorithm tab decides how they are lined up.\n" +
-            "Save - Centre + sides: no instrumental needed. Splits the original into what sits in the centre (_centre) " +
-            "and everything else (_sides). Played together they are exactly the original. " +
-            "The method is chosen on the Centre / Sides tab.\n\n" +
+            "Save is used by the Frequency and Waveform methods. Centre + sides and FindWithin always save their own files.\n\n" +
             "Format, Bit Depth and Bitrate apply to every file written.");
         public static string Gpu => L.T("GPU Acceleration\n" +
             "Exact: only the alignment searches run on the GPU. Results are identical to the CPU.\n" +
@@ -223,8 +237,20 @@ internal static class Messages
         public static string BecauseV3Model => L.T("only the algorithms other than v3 use this.");
         public static string BecauseModel(string name) => L.F("the {0} algorithm fits the level itself.", name);
         public static string BecauseNoSpans(string name) => L.F("the {0} algorithm learns from the whole song, using the stereo difference instead.", name);
-        public static string BecauseSplit => L.T("Save is set to Centre + sides, which only splits the original.");
-        public static string BecauseNotSplit => L.T("Save isn't set to Centre + sides.");
+        public static string BecauseSplit => L.T("The method is Centre + sides, which only splits the original.");
+        public static string BecauseNotSplit => L.T("The method isn't Centre + sides.");
+        public static string BecauseRepeats => L.T("The method is FindWithin, which only searches the original.");
+        public static string BecauseNotRepeats => L.T("The method isn't FindWithin.");
+        public static string Repeats => L.T("FindWithin\n" +
+            "Finds passages that come back later in the same song (a chorus, a loop, a riff) and tests each one by cancelling " +
+            "the later copy against the earlier one. Only pairs that really cancel are saved, in a _repeats folder: " +
+            "_shared is the part of the later copy that the earlier one explains, _difference is what changed " +
+            "(an added vocal, harmony or instrument). Together they are exactly the later passage. " +
+            "repeats.csv lists every pair that was tested and how well it cancelled.\n\n" +
+            "Guide: what the fit listens to. Auto uses the side (left minus right) when the song is wide enough, " +
+            "so a centred vocal doesn't steer it. Full mix uses both channels. Side always uses left minus right.\n" +
+            "Search: Normal tests the best 24 of 120 candidates. Broad tests 120 of 400 and takes several times longer.\n\n" +
+            "The difference is a contrast, not a clean stem: anything the earlier copy had that the later one lacks shows up in it, inverted.");
         public static string Centre => L.T("Centre / Sides Method\n" +
             "How the original is split. The centre file holds what sits in the middle of the stereo image, " +
             "the sides file holds the rest, and the two always add back up to the original.\n\n" +

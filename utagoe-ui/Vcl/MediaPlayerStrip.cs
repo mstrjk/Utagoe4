@@ -19,8 +19,8 @@ internal sealed class MediaPlayerStrip : Control
     public MediaPlayerStrip(params string[] buttons)
     {
         _names = buttons;
-        _glyphs = buttons.Select(b => VclGlyph.Load("CL_" + b)).ToArray();
-        _disabled = buttons.Select(b => VclGlyph.Load("DI_" + b)).ToArray();
+        _glyphs = buttons.Select(b => VclGlyph.Media(b).Enabled).ToArray();
+        _disabled = buttons.Select(b => VclGlyph.Media(b).Disabled).ToArray();
         _enabled = buttons.Select(_ => true).ToArray();
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                  ControlStyles.OptimizedDoubleBuffer | ControlStyles.Selectable, true);

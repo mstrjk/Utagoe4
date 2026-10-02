@@ -1,4 +1,4 @@
-# Utagoe 4.0
+# Utagoe
 Reimagination of Utagoe by TODAKEN.
 
 

@@ -45,7 +45,7 @@ internal sealed partial class SettingsForm : Form
         OutFormatCombo.SelectedIndexChanged += (_, _) => UpdateOutputControls();
         GpuCheckBox.CheckedChanged += (_, _) => GpuExactButton.Enabled = GpuFastButton.Enabled = GpuCheckBox.Checked;
         // 親の選択が変わったら、使われなくなる子の設定を灰色にする。
-        foreach (var g in new[] { MergeRadioGroup, LevelRadioGroup, ModelRadioGroup, AlignRadioGroup, CentreRadioGroup })
+        foreach (var g in new[] { MethodRadioGroup, LevelRadioGroup, ModelRadioGroup, AlignRadioGroup, CentreRadioGroup })
             g.ItemIndexChanged += (_, _) => UpdateEnabled();
         foreach (var c in new[] { OvspCheckBox, CfocusCheckBox, LPFCheckBox, HPFCheckBox, VnameCheckBox })
             c.CheckedChanged += (_, _) => UpdateEnabled();
@@ -76,6 +76,7 @@ internal sealed partial class SettingsForm : Form
             if (_docked == value) return;
             _docked = value;
             OkBitBtn.Visible = CanBitBtn.Visible = ResetButton.Visible = !value;
+            if (PageControl is ThemedTabControl tabs) tabs.MinRows = value ? 1 : 2;
             AcceptButton = value ? null : OkBitBtn;
             CancelButton = value ? null : CanBitBtn;
             if (value)
@@ -166,7 +167,7 @@ internal sealed partial class SettingsForm : Form
     private void PopulateCore(CoreSettings s)
     {
         IntroRadioGroup.ItemIndex = s.IntroMode;
-        MergeRadioGroup.ItemIndex = s.MergeMode;
+        MethodRadioGroup.ItemIndex = s.OutputKind is 2 or 3 ? s.OutputKind : s.MergeMode == 1 ? 1 : 0;
         SoundQtyGroup.ItemIndex   = s.SoundQty;
         LevelRadioGroup.ItemIndex = s.LevelAdpt;
         DataRadioGroup.ItemIndex  = s.ProcMode;
@@ -194,7 +195,9 @@ internal sealed partial class SettingsForm : Form
         VnameCheckBox.Checked = s.AutoNameOutput != 0;
         VnameEdit.Text = s.OutputSuffix;
 
-        OutKindCombo.SelectedIndex = s.OutputKind is >= 0 and <= 2 ? s.OutputKind : 0;
+        OutKindCombo.SelectedIndex = s.OutputKind == 1 ? 1 : 0;
+        RepeatGuideCombo.SelectedIndex = Math.Clamp(s.RepeatGuide, 0, RepeatGuideCombo.Items.Count - 1);
+        RepeatSearchCombo.SelectedIndex = Math.Clamp(s.RepeatBreadth, 0, RepeatSearchCombo.Items.Count - 1);
         CentreRadioGroup.ItemIndex = Math.Clamp(s.CenterMethod, 0, Messages.CentreNames.Length - 1);
         OutFormatCombo.SelectedIndex = Math.Clamp(s.OutputFormat, 0, OutFormatCombo.Items.Count - 1);
         OutDepthCombo.SelectedIndex = Math.Clamp(s.OutputDepth, 0, OutDepthCombo.Items.Count - 1);
@@ -224,7 +227,6 @@ internal sealed partial class SettingsForm : Form
     private CoreSettings Collect(CoreSettings s)
     {
         s.IntroMode = Math.Max(0, IntroRadioGroup.ItemIndex);
-        s.MergeMode = Math.Max(0, MergeRadioGroup.ItemIndex);
         s.SoundQty  = Math.Max(0, SoundQtyGroup.ItemIndex);
         s.LevelAdpt = Math.Max(0, LevelRadioGroup.ItemIndex);
         s.ProcMode  = Math.Max(0, DataRadioGroup.ItemIndex);
@@ -255,8 +257,12 @@ internal sealed partial class SettingsForm : Form
         // 元実装は file name 禁止文字を拒否するが、ここでは入力時に落とす。
         s.OutputSuffix = FileNaming.SanitizeSuffix(VnameEdit.Text);
 
-        s.OutputKind = Math.Max(0, OutKindCombo.SelectedIndex);
+        int method = Math.Max(0, MethodRadioGroup.ItemIndex);
+        if (method <= 1) s.MergeMode = method;
+        s.OutputKind = method >= 2 ? method : Math.Max(0, OutKindCombo.SelectedIndex);
         s.CenterMethod = Math.Max(0, CentreRadioGroup.ItemIndex);
+        s.RepeatGuide = Math.Max(0, RepeatGuideCombo.SelectedIndex);
+        s.RepeatBreadth = Math.Max(0, RepeatSearchCombo.SelectedIndex);
         s.OutputFormat = Math.Max(0, OutFormatCombo.SelectedIndex);
         s.OutputDepth = Math.Max(0, OutDepthCombo.SelectedIndex);
         s.OutputBitrate = Bitrates[Math.Max(0, OutBitrateCombo.SelectedIndex)];
@@ -296,18 +302,22 @@ internal sealed partial class SettingsForm : Form
     //   揃えた組の出力: 抽出しないので、方式・後処理・level は使わず、位置合わせだけを使う
     private void UpdateEnabled()
     {
-        bool pair = OutKindCombo.SelectedIndex == 1;
-        bool split = OutKindCombo.SelectedIndex == 2;
-        bool noExtract = pair || split;
-        bool wave = MergeRadioGroup.ItemIndex == 1;
+        int method = MethodRadioGroup.ItemIndex;
+        bool split = method == 2;
+        bool repeats = method == 3;
+        bool originalOnly = split || repeats;
+        bool pair = !originalOnly && OutKindCombo.SelectedIndex == 1;
+        bool noExtract = pair || originalOnly;
+        bool wave = method == 1;
         bool model = ModelValue > 0;
         bool autoPick = !noExtract && wave && ModelValue == AutoValue;
         bool gcc = !autoPick && AlignRadioGroup.ItemIndex >= 1;
         bool algorithm = ModelValue >= FirstSideAlgorithm && ModelValue <= LastSideAlgorithm;
         bool aligns = pair || (!noExtract && wave && model && !autoPick);
-        bool v3Analysis = !split && !(aligns && gcc);
+        bool v3Analysis = !originalOnly && !(aligns && gcc);
 
-        MergeRadioGroup.Enabled = !noExtract;
+        OutKindCombo.Enabled = !originalOnly;
+        MethodNeedsLabel.Text = originalOnly ? Messages.NeedsOriginal : Messages.NeedsBoth;
         bool freq = !noExtract && !wave;
         SoundQtyGroup.Enabled = freq;
         foreach (Control c in new Control[] { KvolTrackBar, KvolText, KvolWeak, KvolStrong }) c.Enabled = freq;
@@ -336,6 +346,7 @@ internal sealed partial class SettingsForm : Form
         SpansBox.Enabled = !noExtract && wave && model && !algorithm;
         KickDuckCheckBox.Enabled = !noExtract && wave && model;
         CentreRadioGroup.Enabled = split;
+        FindWithinBox.Enabled = repeats;
 
         // 揃えた組の自動命名は _aligned を使うので、声の suffix は使わない。
         VnameEdit.Enabled = AppendLabel.Enabled = VnameCheckBox.Checked && !noExtract;
@@ -344,25 +355,27 @@ internal sealed partial class SettingsForm : Form
     // 灰色になりうる設定と分かりにくい設定の見出しを link にし、mouse を乗せると説明を出す。今使えないならその理由も付ける。
     private void AttachTips()
     {
-        bool Pair() => OutKindCombo.SelectedIndex >= 1;
-        bool Split() => OutKindCombo.SelectedIndex == 2;
-        string NoX() => Split() ? Messages.Tips.BecauseSplit : Messages.Tips.BecausePair;
-        bool Wave() => MergeRadioGroup.ItemIndex == 1;
+        bool Split() => MethodRadioGroup.ItemIndex == 2;
+        bool Repeats() => MethodRadioGroup.ItemIndex == 3;
+        bool Pair() => Split() || Repeats() || OutKindCombo.SelectedIndex == 1;
+        bool OriginalOnly() => Split() || Repeats();
+        string NoX() => Split() ? Messages.Tips.BecauseSplit : Repeats() ? Messages.Tips.BecauseRepeats : Messages.Tips.BecausePair;
+        bool Wave() => MethodRadioGroup.ItemIndex == 1;
         bool Model() => ModelValue > 0;
         bool Auto() => !Pair() && Wave() && ModelValue == AutoValue;
-        bool Gcc() => ((Pair() && !Split()) || (!Pair() && Wave() && Model() && !Auto())) && AlignRadioGroup.ItemIndex >= 1;
+        bool Gcc() => ((Pair() && !OriginalOnly()) || (!Pair() && Wave() && Model() && !Auto())) && AlignRadioGroup.ItemIndex >= 1;
         bool SideAlgorithm() => ModelValue >= FirstSideAlgorithm && ModelValue <= LastSideAlgorithm;
         string ModelName() => Messages.ModelShortNames[Math.Clamp(ModelValue, 0, Messages.ModelShortNames.Length - 1)];
 
         void Tip(Control target, Func<string> text, Func<string?> why) =>
             _links.Add(target, () => why() is { } reason ? text() + Messages.Tips.NotNow + reason : text());
 
-        string? V3Analysis() => Split() ? NoX() : Gcc() ? Messages.Tips.BecauseGcc : null;
+        string? V3Analysis() => OriginalOnly() ? NoX() : Gcc() ? Messages.Tips.BecauseGcc : null;
         string? FreqOnly() => Pair() ? NoX() : Wave() ? Messages.Tips.BecauseFreqOnly : null;
 
         Tip(IntroRadioGroup, () => Messages.Tips.Intro, V3Analysis);
         Tip(AdptLvlGroupBox, () => Messages.Tips.TimeShift, V3Analysis);
-        Tip(MergeRadioGroup, () => Messages.Tips.Method, () => Pair() ? NoX() : null);
+        Tip(MethodRadioGroup, () => Messages.Tips.Method, () => null);
         Tip(SoundQtyGroup, () => Messages.Tips.Accuracy, FreqOnly);
         Tip(KvolCaption, () => Messages.Tips.ExtractLevel, FreqOnly);
         Tip(LevelRadioGroup, () => Messages.Tips.Level, () =>
@@ -379,11 +392,12 @@ internal sealed partial class SettingsForm : Form
         Tip(GpuCheckBox.Parent!, () => Messages.Tips.Gpu, () => GpuCheckBox.Checked ? null : Messages.Tips.BecauseGpuOff);
 
         Tip(ModelRadioGroup, () => Messages.Tips.Model, () => Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : null);
-        Tip(AlignRadioGroup, () => Messages.Tips.Align, () => Split() ? NoX() : Auto() ? Messages.Tips.BecauseAuto : Pair() || (Wave() && Model()) ? null : Messages.Tips.BecauseV3Align);
+        Tip(AlignRadioGroup, () => Messages.Tips.Align, () => OriginalOnly() ? NoX() : Auto() ? Messages.Tips.BecauseAuto : Pair() || (Wave() && Model()) ? null : Messages.Tips.BecauseV3Align);
         Tip(SpansBox, () => Messages.Tips.Spans, () =>
             Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : !Model() ? Messages.Tips.BecauseV3Model :
             SideAlgorithm() ? Messages.Tips.BecauseNoSpans(ModelName()) : null);
         Tip(CentreRadioGroup, () => Messages.Tips.Centre, () => Split() ? null : Messages.Tips.BecauseNotSplit);
+        Tip(FindWithinBox, () => Messages.Tips.Repeats, () => Repeats() ? null : Messages.Tips.BecauseNotRepeats);
         Tip(KickDuckCheckBox, () => Messages.Tips.KickDuck, () =>
             Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : !Model() ? Messages.Tips.BecauseV3Model : null);
     }

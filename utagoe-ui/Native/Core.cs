@@ -76,6 +76,11 @@ internal unsafe struct CoreSettings
 
     public fixed byte LanguageBytes[NameMax];
 
+    public int RepeatGuide;
+    public int RepeatBreadth;
+
+    public int OverwriteOutput;
+
     public string Language
     {
         get
