@@ -1,0 +1,55 @@
+This project is a synthesis of decades of DSP, source separation, adaptive filtering, codec research, perceptual evaluation, and reverse-audio-engineering work. It could not exist without the work of many people. We could not list every author and their respective works here, so instead, we will list them.
+TODAKEN, Bernard Widrow, John R. Glover Jr., John M. McCool, John Kaunitz, Charles S. Williams, Robert H. Hearn, James R. Zeidler, Eugene Dong Jr., Robert C. Goodlin, Christian Hofmann, Michael Guenther, Christian Huemmer, Walter Kellermann, Xiaofei Li, Laurent Girin, Radu Horaud, Derry FitzGerald, A. J. E. M. Janssen, Raymond N. J. Veldhuis, Lodewijk B. Vries, Laurent Oudre, Jonathan Le Roux, Scott Wisdom, Hakan Erdogan, John R. Hershey, Eto Sun, Philippe Depalle, Ondrej Mokry, Peter Balusik, Pavel Rajmic, Alain de Cheveigne, Hideki Kawahara, George P. Kafentzis, Dimitrios Giannoulis, Michael Massberg, Joshua D. Reiss, Benoit Lachaise, Laurent Daudet, Massachusetts Institute of Technology, Zafar Rafii, Bryan Pardo, pyannote.audio contributors, Peter Kabal, Jürgen Herre, James D. Johnston, Michael Chinen, Felicia S. C. Lim, Jan Skoglund, Nikita Gureev, Feargus O'Gorman, Andrew Hines, Pablo M. Delgado, Karlheinz Brandenburg, International Telecommunication Union, Han-Wen Hsu, A. C. den Brinker, Jeroen Breebaart, Per Ekstrand, Jonas Engdegård, Fredrik Henn, Kristofer Kjörling, Werner Oomen, Heiko Purnhagen, Ted Painter, Andreas Spanias, Anil C. Kokaram, Naomi Harte, Stanislaw Gorlow, Elodie Duru, Sylvain Marchand, Anisse Taleb, Christian Jutten, Haoran Sun, Dominique Fourer, Hichem Maaref, Tobias Gburrek, Joerg Schmalenstroeer, Reinhold Haeb-Umbach, Jahn Heymann, Lukas Drude, Christoph Boeddeker, Gerald Enzner, Peter Vary, Sarmad Malik, Jean-Marc Valin, Iain B. Collings, Seung-Jean Kim, Kwangmoo Koh, Stephen Boyd, Dimitry Gorinevsky, Emmanuel J. Candes, Xiaodong Li, Yi Ma, John Wright, Rainer Martin, Science and Technology Facilities Council / SciPy contributors, Paderborn University / FGNT, audiojs, p-hlp, jeonchangbin49 & Speex project / Jean-Marc Valin
+
+All articles below are credited where possible, if you believe your work was used in the creation of Utagoe4, please reach out to mstrjk@mstrjk.com.
+
+Bernard Widrow, John R. Glover Jr., John M. McCool, John Kaunitz, Charles S. Williams, Robert H. Hearn, James R. Zeidler, Eugene Dong Jr., and Robert C. Goodlin, "Adaptive Noise Cancelling: Principles and Applications" - https://www-isl.stanford.edu/people/widrow/papers/j1975adaptivenoise.pdf
+Christian Hofmann, Michael Guenther, Christian Huemmer, and Walter Kellermann, "Efficient Nonlinear Acoustic Echo Cancellation by Partitioned-Block Significance-Aware Hammerstein Group Models" - https://eurasip.org/Proceedings/Eusipco/Eusipco2016/papers/1570256158.pdf
+Xiaofei Li, Laurent Girin, and Radu Horaud, "Expectation-Maximization for Speech Source Separation Using Convolutive Transfer Function" - https://arxiv.org/abs/1904.05249
+Derry FitzGerald, "Harmonic/Percussive Separation Using Median Filtering" - https://www.dafx.de/paper-archive/2010/DAFx10/DerryFitzGerald_DAFx10_P15.pdf
+A. J. E. M. Janssen, Raymond N. J. Veldhuis, and Lodewijk B. Vries, "Adaptive Interpolation of Discrete-Time Signals That Can Be Modeled as Autoregressive Processes" - https://research.utwente.nl/en/publications/adaptive-interpolation-of-discrete-time-signals-that-can-be-model/
+Laurent Oudre, "Interpolation of Missing Samples in Sound Signals Based on Autoregressive Modeling" - https://www.ipol.im/pub/art/2018/23/
+Jonathan Le Roux, Scott Wisdom, Hakan Erdogan, and John R. Hershey, "SDR - Half-Baked or Well Done?" - https://www.jonathanleroux.org/pdf/LeRoux2019ICASSP05sdr.pdf
+Eto Sun and Philippe Depalle, "Hybrid Audio Inpainting Approach with Structured Sparse Decomposition and Sinusoidal Modeling" - https://www.dafx.de/paper-archive/2024/papers/DAFx24_paper_81.pdf
+Ondrej Mokry, Peter Balusik, and Pavel Rajmic, "Janssen 2.0: Audio Inpainting in the Time-frequency Domain" - https://arxiv.org/abs/2409.06392
+Alain de Cheveigne and Hideki Kawahara, "YIN, a Fundamental Frequency Estimator for Speech and Music" - https://recherche.ircam.fr/equipes/pcm/cheveign/pss/2002_JASA_YIN.pdf
+George P. Kafentzis, "On the Parameter Estimation of Sinusoidal Models for Speech and Audio Signals" - https://arxiv.org/abs/2401.01255
+Dimitrios Giannoulis, Michael Massberg, and Joshua D. Reiss, "Digital Dynamic Range Compressor Design - A Tutorial and Analysis" - https://joshreiss.github.io/documents/2012/GiannoulisMassbergReiss-dynamicrangecompression-JAES2012.pdf
+Benoit Lachaise and Laurent Daudet, "Inverting Dynamics Compression with Minimal Side Information" - https://www.dafx.de/paper-archive/2008/papers/dafx08_18.pdf
+Massachusetts Institute of Technology, "Frequency Response of LTI Systems" - https://ocw.mit.edu/courses/6-02-introduction-to-eecs-ii-digital-communication-systems-fall-2012/43ab3e7240ebab8bbdcde3a8601abdac_MIT6_02F12_chap12.pdf
+Zafar Rafii and Bryan Pardo, "Online REPET-SIM for Real-time Speech Enhancement" - https://www.cs.northwestern.edu/~zra446/doc/Rafii-Pardo%20-%20Online%20REPET-SIM%20for%20Real-time%20Speech%20Enhancement%20-%20ICASSP%202013.pdf
+pyannote.audio contributors, "pyannote-audio" - https://github.com/pyannote/pyannote-audio
+Peter Kabal, "An Examination and Interpretation of ITU-R BS.1387: Perceptual Evaluation of Audio Quality" - https://www.mmsp.ece.mcgill.ca/Documents/Reports/2002/KabalR2002v2.pdf
+Jürgen Herre and James D. Johnston, "Enhancing the Performance of Perceptual Audio Coders by Using Temporal Noise Shaping (TNS)" - https://www.ee.columbia.edu/~dpwe/papers/HerreJ96-noisesh.pdf
+Michael Chinen, Felicia S. C. Lim, Jan Skoglund, Nikita Gureev, Feargus O'Gorman, and Andrew Hines, "ViSQOL v3: An Open Source Production Ready Objective Speech and Audio Metric" - https://arxiv.org/pdf/2004.09584.pdf
+Pablo M. Delgado and Jürgen Herre, "Can We Still Use PEAQ? A Performance Analysis of the ITU Standard for the Objective Assessment of Perceived Audio Quality" - https://arxiv.org/pdf/2212.01467.pdf
+Karlheinz Brandenburg, "MP3 and AAC Explained" - https://www.iis.fraunhofer.de/content/dam/iis/de/doc/ame/conference/AES-17-Conference_mp3-and-AAC-explained_AES17.pdf
+International Telecommunication Union, "ITU-R BS.1387-2: Method for Objective Measurements of Perceived Audio Quality" - https://www.itu.int/dms_pubrec/itu-r/rec/bs/R-REC-BS.1387-2-202305-I!!PDF-E.pdf
+International Telecommunication Union, "ITU-R BS.1534-3: Method for the Subjective Assessment of Intermediate Quality Level of Audio Systems" - https://www.itu.int/rec/R-REC-BS.1534-3-201510-I/en
+Han-Wen Hsu, "Compression Artifacts in Perceptual Audio Coding" - https://ir.lib.nycu.edu.tw/bitstream/11536/78855/1/782601.pdf
+A. C. den Brinker, Jeroen Breebaart, Per Ekstrand, Jonas Engdegård, Fredrik Henn, Kristofer Kjörling, Werner Oomen, and Heiko Purnhagen, "An Overview of the Coding Standard MPEG-4 Audio Amendments 1 and 2: HE-AAC, SSC, and HE-AAC v2" - https://link.springer.com/article/10.1155/2009/468971
+Ted Painter and Andreas Spanias, "Perceptual Coding of Digital Audio" - https://www.mp3-tech.org/programmer/docs/audiopaper1.pdf
+Andrew Hines, Jan Skoglund, Anil C. Kokaram, and Naomi Harte, "ViSQOL: An Objective Speech Quality Model" - https://www.tara.tcd.ie/bitstreams/6d7c75a5-efb5-496c-a887-3dd849504a34/download
+Stanislaw Gorlow and Joshua D. Reiss, "Model-Based Inversion of Dynamic Range Compression" - https://doi.org/10.1109/TASL.2013.2253099
+Stanislaw Gorlow, Joshua D. Reiss, and Elodie Duru, "Restoring the Dynamics of Clipped Audio Material by Inversion of Dynamic Range Compression" - https://doi.org/10.1109/BMSB.2014.6873575
+Stanislaw Gorlow and Sylvain Marchand, "Reverse Engineering Stereo Music Recordings Pursuing an Informed Two-Stage Approach" - https://www.dafx.de/paper-archive/details/PSp65UXAoQPNbcpNxAFowg
+Anisse Taleb and Christian Jutten, "Source Separation in Post-Nonlinear Mixtures" - https://doi.org/10.1109/78.790661
+Haoran Sun, Dominique Fourer, and Hichem Maaref, "Hybrid Model-Driven Inversion of Audio Dynamic Range Compression and Expansion" - https://github.com/SunHaoRanCN/DRC_Inversion
+Haoran Sun, Dominique Fourer, and Hichem Maaref, "Black-Box Optimization for Identifying and Inverting Audio Dynamic Range Control Effects" - https://arxiv.org/abs/2607.19645
+Tobias Gburrek, Joerg Schmalenstroeer, and Reinhold Haeb-Umbach, "On Synchronization of Wireless Acoustic Sensor Networks in the Presence of Time-Varying Sampling Rate Offsets and Speaker Changes" - https://doi.org/10.1109/ICASSP43922.2022.9746284
+Joerg Schmalenstroeer, Jahn Heymann, Lukas Drude, Christoph Boeddeker, and Reinhold Haeb-Umbach, "Multi-Stage Coherence Drift Based Sampling Rate Synchronization for Acoustic Beamforming" - https://doi.org/10.1109/MMSP.2017.8122278
+Gerald Enzner and Peter Vary, "Frequency-domain adaptive Kalman filter for acoustic echo control in hands-free telephones" - https://doi.org/10.1016/j.sigpro.2005.09.013
+Sarmad Malik and Gerald Enzner, "State-Space Frequency-Domain Adaptive Filtering for Nonlinear Acoustic Echo Cancellation" - https://doi.org/10.1109/TASL.2012.2196512
+Sarmad Malik and Gerald Enzner, "A Variational Bayesian Learning Approach for Nonlinear Acoustic Echo Control" - https://doi.org/10.1109/TSP.2013.2281021
+Jean-Marc Valin and Iain B. Collings, "A New Robust Frequency Domain Echo Canceller with Closed-Loop Learning Rate Adaptation" - https://doi.org/10.1109/ICASSP.2007.366624
+Jean-Marc Valin, "On Adjusting the Learning Rate in Frequency Domain Echo Cancellation With Double-Talk" - http://people.xiph.org/~jm/papers/valin_taslp2006.pdf
+Seung-Jean Kim, Kwangmoo Koh, Stephen Boyd, and Dimitry Gorinevsky, "l1 Trend Filtering" - https://doi.org/10.1137/070690274
+Emmanuel J. Candes, Xiaodong Li, Yi Ma, and John Wright, "Robust Principal Component Analysis?" - https://arxiv.org/abs/0912.3599
+Gerald Enzner, Rainer Martin, and Peter Vary, "Partitioned residual echo power estimation for frequency-domain acoustic echo cancellation and postfiltering" - https://doi.org/10.1002/ett.4460130205
+Jean-Marc Valin, "Channel Decorrelation For Stereo Acoustic Echo Cancellation In High-Quality Audio Communication" - https://arxiv.org/abs/1603.03364
+Science and Technology Facilities Council / SciPy contributors, "scipy.signal.coherence" - https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.coherence.html
+Paderborn University / FGNT, "paderwasn" - https://github.com/fgnt/paderwasn
+audiojs, "dynamics" - https://github.com/audiojs/dynamics
+p-hlp, "CTAGDRC" - https://github.com/p-hlp/CTAGDRC
+jeonchangbin49, "LimitAug" - https://github.com/jeonchangbin49/LimitAug
+Speex project / Jean-Marc Valin, "SpeexDSP MDF Echo Canceller" - https://github.com/xiph/speexdsp

@@ -21,3 +21,5 @@ dist/
 !licenses/**/LICENSE*
 **__pycache__
 research/
+*.ini
+Visuals/Unused/
