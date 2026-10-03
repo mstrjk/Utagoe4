@@ -8,7 +8,7 @@
 #include "algorithms/refcancel/rc.h"
 #include "algorithms/hardpair/hp.h"
 #include "algorithms/centresides/cs.h"
-#include "algorithms/repeats/fw.h"
+#include "algorithms/repeats/rp.h"
 #include "algorithms/bandwidth/bw.h"
 #include "algorithms/lowend/lowend.h"
 #include "algorithms/upmix/upmix.h"
@@ -944,7 +944,7 @@ std::string clockLabel(double seconds) {
     return buf;
 }
 
-AudioBuffer toBuffer(const fw::Audio& a, int sr) {
+AudioBuffer toBuffer(const rp::Audio& a, int sr) {
     AudioBuffer b;
     b.sampleRate = sr;
     b.channels = a.channels;
@@ -965,13 +965,13 @@ RepeatsResult extractRepeats(const AudioBuffer& original, const Settings& settin
     const int sr = original.sampleRate;
     const int ch = std::min(original.channels, 2);
     const std::size_t frames = original.frames();
-    fw::Audio a;
+    rp::Audio a;
     a.channels = ch;
     a.v.resize(frames * static_cast<std::size_t>(ch));
     for (std::size_t i = 0; i < frames; ++i)
         for (int c = 0; c < ch; ++c) a.at(i, c) = original.samples[i * static_cast<std::size_t>(original.channels) + static_cast<std::size_t>(c)];
     if (original.channels > 2) log::detail("  using the first two of %d channels", original.channels);
-    fw::Config cfg;
+    rp::Config cfg;
     static const char* guides[] = {"auto", "full", "side"};
     cfg.guide = guides[std::clamp(settings.repeatGuide, 0, 2)];
     if (ch < 2 && cfg.guide == "side") cfg.guide = "full";
@@ -999,10 +999,10 @@ RepeatsResult extractRepeats(const AudioBuffer& original, const Settings& settin
         clip.difference = AudioBuffer();
         res.clips.push_back(std::move(clip));
     };
-    fw::Outcome o;
+    rp::Outcome o;
     try {
-        o = fw::run(a, sr, cfg, report,
-                    [&](const fw::Match& m, fw::Extraction& x) {
+        o = rp::run(a, sr, cfg, report,
+                    [&](const rp::Match& m, rp::Extraction& x) {
                         RepeatClip c;
                         c.name = clockLabel(m.target) + "_from_" + clockLabel(m.source);
                         c.status = x.status;
@@ -1022,7 +1022,7 @@ RepeatsResult extractRepeats(const AudioBuffer& original, const Settings& settin
                         }
                         emit(c);
                     },
-                    [&](fw::JointResult& j) {
+                    [&](rp::JointResult& j) {
                         RepeatClip c;
                         c.joint = true;
                         c.name = clockLabel(j.targetStart) + "_joint";

@@ -1,11 +1,11 @@
-#include "fw_internal.h"
+#include "rp_internal.h"
 
 #include <algorithm>
 #include <cmath>
 #include <numeric>
 
 namespace utagoe {
-namespace fw {
+namespace rp {
 namespace {
 
 constexpr double kTiny = 1e-20;

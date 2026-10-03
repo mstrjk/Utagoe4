@@ -1,7 +1,7 @@
-#ifndef UTAGOE_FW_INTERNAL_H
-#define UTAGOE_FW_INTERNAL_H
+#ifndef UTAGOE_RP_INTERNAL_H
+#define UTAGOE_RP_INTERNAL_H
 
-#include "fw.h"
+#include "rp.h"
 #include "parallel.h"
 
 #include <complex>
@@ -13,7 +13,7 @@
 #include <vector>
 
 namespace utagoe {
-namespace fw {
+namespace rp {
 
 constexpr double kEps = 1e-12;
 constexpr double kPi = 3.14159265358979323846;

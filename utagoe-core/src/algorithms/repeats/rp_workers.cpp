@@ -1,4 +1,4 @@
-#include "fw_internal.h"
+#include "rp_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,7 +8,7 @@
 #include <unordered_map>
 
 namespace utagoe {
-namespace fw {
+namespace rp {
 
 const std::vector<std::pair<std::string, std::pair<std::string, double>>>& workerInfo() {
     static const std::vector<std::pair<std::string, std::pair<std::string, double>>> info = {

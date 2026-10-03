@@ -159,8 +159,8 @@ set(CORE_SOURCES
     src/algorithms/centresides/cs.cpp src/algorithms/centresides/true_ms.cpp src/algorithms/centresides/phantom.cpp
     src/algorithms/centresides/coherence.cpp src/algorithms/centresides/adress.cpp src/algorithms/centresides/duet.cpp
     src/algorithms/centresides/pca.cpp src/algorithms/centresides/pretty.cpp
-    src/algorithms/repeats/fw_dsp.cpp src/algorithms/repeats/fw_workers.cpp src/algorithms/repeats/fw_discovery.cpp
-    src/algorithms/repeats/fw_align.cpp src/algorithms/repeats/fw_verify.cpp src/algorithms/repeats/fw_run.cpp
+    src/algorithms/repeats/rp_dsp.cpp src/algorithms/repeats/rp_workers.cpp src/algorithms/repeats/rp_discovery.cpp
+    src/algorithms/repeats/rp_align.cpp src/algorithms/repeats/rp_verify.cpp src/algorithms/repeats/rp_run.cpp
     src/algorithms/bandwidth/bw.cpp src/algorithms/lowend/lowend.cpp
     src/algorithms/upmix/upmix_dsp.cpp src/algorithms/upmix/specfield.cpp src/algorithms/upmix/scene.cpp)
 
@@ -206,7 +206,7 @@ target_link_libraries(utagoe_bench PRIVATE utagoe_objs)
 target_link_options(utagoe_bench PRIVATE ${STATIC_RUNTIME})
 
 # By Waveform 代替モデルを Python 版の出力と照合する道具。配布物には含めない。
-foreach(parity rc hp cs fw bw probe up)
+foreach(parity rc hp cs rp bw probe up)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${parity}_parity.cpp)
         add_executable(utagoe_${parity}_parity EXCLUDE_FROM_ALL tests/${parity}_parity.cpp)
         target_link_libraries(utagoe_${parity}_parity PRIVATE utagoe_objs)

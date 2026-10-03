@@ -1,4 +1,4 @@
-#include "fw_internal.h"
+#include "rp_internal.h"
 #include "parallel.h"
 
 #include <algorithm>
@@ -6,7 +6,7 @@
 #include <numeric>
 
 namespace utagoe {
-namespace fw {
+namespace rp {
 
 double Rng::normal() {
     if (have_) { have_ = false; return spare_; }

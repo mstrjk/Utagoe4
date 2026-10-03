@@ -1,5 +1,5 @@
-#ifndef UTAGOE_FW_H
-#define UTAGOE_FW_H
+#ifndef UTAGOE_RP_H
+#define UTAGOE_RP_H
 
 #include <functional>
 #include <map>
@@ -8,7 +8,7 @@
 #include <vector>
 
 namespace utagoe {
-namespace fw {
+namespace rp {
 
 struct Error : std::runtime_error {
     using std::runtime_error::runtime_error;

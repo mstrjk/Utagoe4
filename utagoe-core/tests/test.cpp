@@ -1898,7 +1898,7 @@ void testRepeats() {
     w.repeatGuide = 2;
     w.repeatBreadth = 1;
     w.overwriteOutput = true;
-    const std::string path = tempPath("fw.ini");
+    const std::string path = tempPath("repeats.ini");
     w.save(path);
     Settings rr;
     rr.load(path);

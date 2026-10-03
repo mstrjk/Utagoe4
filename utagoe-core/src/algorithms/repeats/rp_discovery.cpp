@@ -1,4 +1,4 @@
-#include "fw_internal.h"
+#include "rp_internal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,7 +8,7 @@
 #include <set>
 
 namespace utagoe {
-namespace fw {
+namespace rp {
 namespace {
 
 const std::pair<std::string, double>& infoOf(const std::string& name) {
