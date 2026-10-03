@@ -131,7 +131,7 @@ internal sealed class AboutForm : Form
         _ok.DialogResult = DialogResult.None;
         _ok.Click += (_, _) => Close();
 
-        _iconCaption = new Label { Text = "App Icon", AutoSize = true, Location = new Point(16, 170), BackColor = Color.Transparent };
+        _iconCaption = new Label { Text = "Theme & Icon", UseMnemonic = false, AutoSize = true, Location = new Point(16, 170), BackColor = Color.Transparent };
         foreach (string name in AppIcons.Names)
         {
             var choice = new IconChoice(name) { Size = new Size(26, 26), TabStop = true };

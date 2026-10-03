@@ -104,13 +104,24 @@ bool Settings::load(const std::string& path) {
     outputBitrate = getInt(out, "Bitrate", outputBitrate);
     {
         const int k = getInt(out, "Kind", static_cast<int>(outputKind));
-        outputKind = (k >= 0 && k <= 3) ? static_cast<OutputKind>(k) : OutputKind::Vocal;
+        outputKind = (k >= 0 && k <= 4) ? static_cast<OutputKind>(k) : OutputKind::Vocal;
+        const int save = getInt(out, "Save", -1);
+        if (save > 0) saveMask = save & 15;
+        if (outputKind == OutputKind::AlignedPair) {
+            outputKind = OutputKind::Vocal;
+            if (save <= 0) saveMask = kSaveAligned;
+        }
     }
     centerMethod  = std::clamp(getInt(out, "CentreMethod", centerMethod), 0, 6);
     repeatGuide   = std::clamp(getInt(out, "RepeatGuide", repeatGuide), 0, 2);
     repeatBreadth = std::clamp(getInt(out, "RepeatBreadth", repeatBreadth), 0, 1);
+    upmixMethod   = std::clamp(getInt(out, "UpmixMethod", upmixMethod), 0, 9);
+    upmixSevenOne = getBool(out, "UpmixSevenOne", upmixSevenOne);
+    upmixLfe      = getBool(out, "UpmixLfe", upmixLfe);
+    normalizeOutput = getBool(out, "Normalize", normalizeOutput);
     outputFolder  = getStr(out, "Folder", outputFolder);
     overwriteOutput = getBool(out, "Overwrite", overwriteOutput);
+    removeSubsonic = getBool(out, "RemoveSubsonic", removeSubsonic);
 
     useGpu          = getBool(gpu, "Use", useGpu);
     gpuMode         = static_cast<GpuMode>(getInt(gpu, "Mode", static_cast<int>(gpuMode)) == 1 ? 1 : 0);
@@ -118,10 +129,19 @@ bool Settings::load(const std::string& path) {
 
     const int wm = getInt(model, "Model", static_cast<int>(waveModel));
     waveModel = (wm >= 0 && wm <= 13) ? static_cast<WaveModel>(wm) : WaveModel::V3;
+    freqModel = std::clamp(getInt(model, "FreqModel", freqModel), 0, 2);
+    if (waveModel == WaveModel::Nmf || waveModel == WaveModel::Spatial) {
+        if (mergeMode == MergeMode::ByWaveform) {
+            mergeMode = MergeMode::ByFrequency;
+            freqModel = waveModel == WaveModel::Nmf ? 1 : 2;
+        }
+        waveModel = WaveModel::V3;
+    }
     const int wa = getInt(model, "Align", static_cast<int>(waveAlign));
     waveAlign = (wa >= 0 && wa <= 2) ? static_cast<WaveAlign>(wa) : WaveAlign::V3Block;
     fitSpans  = getStr(model, "FitSpans", fitSpans);
-    kickDuck  = getBool(model, "KickDuck", kickDuck);
+    matchBandwidth = getBool(model, "MatchBandwidth", matchBandwidth);
+    matchLowEnd = getBool(model, "MatchLowEnd", matchLowEnd);
 
     appIcon = getStr(ui, "Icon", appIcon);
     uiLanguage = getStr(ui, "Language", uiLanguage);
@@ -162,20 +182,28 @@ bool Settings::save(const std::string& path) const {
     o << "Depth="     << static_cast<int>(outputDepth)  << "\r\n";
     o << "Bitrate="   << outputBitrate                  << "\r\n";
     o << "Kind="      << static_cast<int>(outputKind)   << "\r\n";
+    o << "Save="      << saveMask                       << "\r\n";
     o << "CentreMethod=" << centerMethod                << "\r\n";
     o << "RepeatGuide=" << repeatGuide                  << "\r\n";
     o << "RepeatBreadth=" << repeatBreadth              << "\r\n";
+    o << "UpmixMethod=" << upmixMethod                  << "\r\n";
+    o << "UpmixSevenOne=" << (upmixSevenOne ? 1 : 0)     << "\r\n";
+    o << "UpmixLfe=" << (upmixLfe ? 1 : 0)               << "\r\n";
+    o << "Normalize=" << (normalizeOutput ? 1 : 0)       << "\r\n";
     o << "Folder="    << outputFolder                   << "\r\n";
     o << "Overwrite=" << (overwriteOutput ? 1 : 0)      << "\r\n";
+    o << "RemoveSubsonic=" << (removeSubsonic ? 1 : 0)  << "\r\n";
     o << "\r\n[" << kGpuSection << "]\r\n";
     o << "Use="        << (useGpu ? 1 : 0)             << "\r\n";
     o << "Mode="       << static_cast<int>(gpuMode)    << "\r\n";
     o << "HideNotice=" << (gpuNoticeHidden ? 1 : 0)    << "\r\n";
     o << "\r\n[" << kModelSection << "]\r\n";
     o << "Model="      << static_cast<int>(waveModel)  << "\r\n";
+    o << "FreqModel="  << freqModel                    << "\r\n";
     o << "Align="      << static_cast<int>(waveAlign)  << "\r\n";
     o << "FitSpans="   << fitSpans                     << "\r\n";
-    o << "KickDuck="   << (kickDuck ? 1 : 0)           << "\r\n";
+    o << "MatchBandwidth=" << (matchBandwidth ? 1 : 0) << "\r\n";
+    o << "MatchLowEnd="    << (matchLowEnd ? 1 : 0)    << "\r\n";
     o << "\r\n[" << kUiSection << "]\r\n";
     o << "Icon="       << appIcon                      << "\r\n";
     o << "Language="   << uiLanguage                   << "\r\n";

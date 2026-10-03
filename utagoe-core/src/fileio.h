@@ -46,6 +46,20 @@ inline std::wstring longPath(std::wstring w) {
 }
 #endif
 
+inline std::string cannotCreate(const std::string& path) {
+#ifdef _WIN32
+    const DWORD e = GetLastError();
+    const char* why = e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION ? "the file is open in another program"
+                    : e == ERROR_ACCESS_DENIED ? "access denied (the file may be read-only, open elsewhere, or in a protected folder)"
+                    : e == ERROR_PATH_NOT_FOUND ? "the folder does not exist"
+                    : e == ERROR_DISK_FULL || e == ERROR_HANDLE_DISK_FULL ? "the disk is full"
+                    : nullptr;
+    if (why) return "cannot create " + path + ": " + why;
+    if (e != 0) return "cannot create " + path + " (Windows error " + std::to_string(e) + ")";
+#endif
+    return "cannot create " + path;
+}
+
 inline std::FILE* openFile(const std::string& utf8Path, const char* mode) {
 #ifdef _WIN32
     return _wfopen(longPath(widenUtf8(utf8Path)).c_str(), widenUtf8(mode).c_str());

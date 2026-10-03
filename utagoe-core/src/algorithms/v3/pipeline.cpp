@@ -103,6 +103,10 @@ void Pipeline::flush() {
         pre_[1].resize(n, 0.0);
     }
 
+    if (c_->tapRaw)
+        for (std::size_t i = 0; i < n; ++i)
+            for (int k = 0; k < ch_; ++k) c_->rawTap.push_back(static_cast<float>(pre_[k][i]));
+
     // 元実装 0x40f748。抽出結果の L/R をその場で Centralization する。
     if (hasCntr_) {
         fl_.resize(n);

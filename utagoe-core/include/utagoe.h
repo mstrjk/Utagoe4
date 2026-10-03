@@ -39,7 +39,12 @@ enum class WaveModel { V3 = 0, Robust = 1, Kalman = 2, Hammerstein = 3, Nmf = 4,
 // 代替モデルの位置合わせ。V3Block は元実装の解析と block ごとの drift 探索、Gcc は相互相関による offset + clock drift。
 enum class WaveAlign { V3Block = 0, Gcc = 1, Dense = 2 };
 // 出力するもの (v3 にない拡張)。Vocal は抽出した声。AlignedPair は原曲と、その時間軸に合わせたインストの 2 ファイル。
-enum class OutputKind { Vocal = 0, AlignedPair = 1, CenterSides = 2, Repeats = 3 };
+enum class OutputKind { Vocal = 0, AlignedPair = 1, CenterSides = 2, Repeats = 3, Upmix = 4 };
+
+constexpr int kSaveDefault = 1;
+constexpr int kSaveAligned = 2;
+constexpr int kSaveRaw = 4;
+constexpr int kSaveMembers = 8;
 
 struct Settings {
     ProcMode  procMode  = ProcMode::Normal;
@@ -68,7 +73,7 @@ struct Settings {
 
     bool searchInstFile   = true;
     bool autoNameOutput   = true;
-    std::string outputSuffix = "_vo";
+    std::string outputSuffix = "_vocals";
 
     // ここから下は v3 にない拡張設定。INI では [Output] section に保存する。
     OutputFormat outputFormat  = OutputFormat::Wav;
@@ -85,7 +90,15 @@ struct Settings {
     WaveModel   waveModel = WaveModel::V3;
     WaveAlign   waveAlign = WaveAlign::V3Block;
     std::string fitSpans;
-    bool        kickDuck = false;
+    bool        matchBandwidth = false;
+    int         upmixMethod = 3;
+    bool        upmixSevenOne = false;
+    bool        upmixLfe = true;
+    bool        normalizeOutput = true;
+    bool        matchLowEnd = true;
+    bool        removeSubsonic = false;
+    int         freqModel = 0;
+    int         saveMask = kSaveDefault;
 
     // 出力するもの。INI では [Output] section の Kind。AlignedPair の位置合わせは waveAlign に従う (処理方式には依らない)。
     OutputKind  outputKind = OutputKind::Vocal;
@@ -201,6 +214,7 @@ struct ExtractResult {
     std::string error;
     bool        gpuUsed = false;
     std::string gpuAdapter;
+    std::vector<std::pair<std::string, AudioBuffer>> extras;
 
     explicit operator bool() const { return error.empty() && !cancelled; }
 };
@@ -215,7 +229,9 @@ ExtractResult extract(const AudioBuffer& original,
                       const Settings& settings,
                       bool quantize16,
                       ProgressFn progress = nullptr,
-                      void* progressUser = nullptr);
+                      void* progressUser = nullptr,
+                      const AudioInfo* originalInfo = nullptr,
+                      const AudioInfo* instrumentalInfo = nullptr);
 
 // fitSpans の文字列を秒の区間に直す。書式は "開始-終了" を , か ; で区切ったもの。時刻は秒 (小数可) か m:ss / h:mm:ss。
 // 読めなければ false と error を返す。
@@ -247,6 +263,9 @@ struct RepeatsResult {
 
     explicit operator bool() const { return error.empty() && !cancelled; }
 };
+
+ExtractResult extractUpmix(const AudioBuffer& original, const AudioBuffer* instrumental, const Settings& settings, ProgressFn progress = nullptr,
+                           void* progressUser = nullptr, const AudioInfo* originalInfo = nullptr, const AudioInfo* instrumentalInfo = nullptr);
 
 RepeatsResult extractRepeats(const AudioBuffer& original, const Settings& settings, const std::function<bool(RepeatClip&)>& sink,
                              ProgressFn progress = nullptr, void* progressUser = nullptr);

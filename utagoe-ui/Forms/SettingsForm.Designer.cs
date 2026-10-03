@@ -18,10 +18,10 @@ partial class SettingsForm
 
     private VclRadioGroup IntroRadioGroup = null!;
     private VclRadioGroup MethodRadioGroup = null!;
-    private Label MethodNeedsLabel = null!;
+    private ThemedRadioButton[] UseMethodButtons = null!;
+    private Label[] NeedsLabels = null!;
     private VclRadioGroup SoundQtyGroup = null!;
     private VclRadioGroup LevelRadioGroup = null!;
-    private RaisedLine Panel1 = null!;
     private VclTrackBar KvolTrackBar = null!;
     private Label KvolText = null!;
     private VclTrackBar KlvlTrackBar = null!;
@@ -58,17 +58,36 @@ partial class SettingsForm
     private VclRadioGroup ModelRadioGroup = null!;
     private VclRadioGroup AlignRadioGroup = null!;
     private TextBox SpansEdit = null!;
-    private ThemedCheckBox KickDuckCheckBox = null!;
+    private ThemedCheckBox MatchBandwidthCheckBox = null!;
+    private ThemedCheckBox MatchLowEndCheckBox = null!;
+    private ThemedCheckBox SubsonicCheckBox = null!;
     private VclRadioGroup CentreRadioGroup = null!;
     private ComboBox OutDepthCombo = null!;
     private ComboBox OutBitrateCombo = null!;
-    private ComboBox OutKindCombo = null!;
-    private VclGroupBox FindWithinBox = null!;
+    private CheckDropDown SaveDropDown = null!;
+    private VclGroupBox RepeatsBox = null!;
     private ComboBox RepeatGuideCombo = null!;
     private ComboBox RepeatSearchCombo = null!;
+    private VclRadioGroup UpmixRadioGroup = null!;
+    private ComboBox UpmixLayoutCombo = null!;
+    private ThemedCheckBox UpmixLfeCheckBox = null!;
+    private ComboBox UpmixVocalCombo = null!;
+    private Label UpmixLayoutLabel = null!;
+    private Label UpmixVocalLabel = null!;
 
     // 上の選択で使われなくなる部品を灰色にするため、field として持つ (v4)。
-    private Label KvolCaption = null!;
+    private VclGroupBox KvolBox = null!;
+    private VclRadioGroup FreqModelRadioGroup = null!;
+    private TabPage FreqTab = null!;
+    private TabPage WaveTab = null!;
+    private ThemedTabControl FreqPages = null!;
+    private ThemedTabControl WavePages = null!;
+    private TabPage FreqMainPage = null!;
+    private TabPage FreqSettingsPage = null!;
+    private TabPage WaveMainPage = null!;
+    private TabPage WaveSettingsPage = null!;
+    private Panel SharedMain = null!;
+    private Panel SharedSettings = null!;
     private Label KvolWeak = null!;
     private Label KvolStrong = null!;
     private VclGroupBox FilterBox = null!;
@@ -93,7 +112,7 @@ partial class SettingsForm
         // 実機では system menu / minimize / maximize がなく、OK / Cancel だけで閉じる。DFM の既定値より実際の window style を優先する。
         AutoScaleDimensions = new SizeF(96F, 96F);
         AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(506, 359);
+        ClientSize = new Size(600, 452);
         Font = new Font("Tahoma", 9F);
         FormBorderStyle = FormBorderStyle.FixedSingle;
         ControlBox = false;
@@ -101,166 +120,191 @@ partial class SettingsForm
         StartPosition = FormStartPosition.CenterScreen;
         Text = "Settings";
 
-        OkBitBtn = new BitBtn { Bounds = new Rectangle(308, 327, 89, 25), TabIndex = 0 };
+        OkBitBtn = new BitBtn { Bounds = new Rectangle(402, 420, 89, 25), TabIndex = 0 };
         OkBitBtn.SetKind(BitBtnKind.OK);
-        CanBitBtn = new BitBtn { Bounds = new Rectangle(409, 327, 89, 25), Text = "Cancel", TabIndex = 1 };
+        CanBitBtn = new BitBtn { Bounds = new Rectangle(503, 420, 89, 25), Text = "Cancel", TabIndex = 1 };
         CanBitBtn.SetKind(BitBtnKind.Cancel);
-        ResetButton = new BitBtn { Bounds = new Rectangle(200, 327, 75, 25), Text = "Reset", TabIndex = 3, UseVisualStyleBackColor = true };
+        ResetButton = new BitBtn { Bounds = new Rectangle(282, 420, 108, 25), Text = "Reset", TabIndex = 3, UseVisualStyleBackColor = true };
+        ((BitBtn)ResetButton).SetGlyph("reset");
         AcceptButton = OkBitBtn;
         CancelButton = CanBitBtn;
 
-        PageControl = new ThemedTabControl { Bounds = new Rectangle(8, 8, 489, 313), TabIndex = 2, Multiline = true, SizeMode = TabSizeMode.FillToRight, MinRows = 2 };
-        var tab0 = new TabPage(App.Messages.MethodTab) { UseVisualStyleBackColor = true };
-        var tab1 = new TabPage("Processing") { UseVisualStyleBackColor = true };
-        var tab2 = new TabPage("Advanced") { UseVisualStyleBackColor = true };
-        var tab3 = new TabPage("Output") { UseVisualStyleBackColor = true };
-        var tab4 = new TabPage(App.Messages.ModelTab) { UseVisualStyleBackColor = true };
+        PageControl = new ThemedTabControl { Bounds = new Rectangle(8, 8, 585, 406), TabIndex = 2, Multiline = true, SizeMode = TabSizeMode.FillToRight, MinRows = 2 };
+        FreqTab = new TabPage("Frequency") { UseVisualStyleBackColor = true };
+        WaveTab = new TabPage("Waveform") { UseVisualStyleBackColor = true };
         var tab5 = new TabPage(App.Messages.CentreTab) { UseVisualStyleBackColor = true };
-        var tab6 = new TabPage(App.Messages.FindWithinGroup) { UseVisualStyleBackColor = true };
-        PageControl.TabPages.AddRange(new[] { tab0, tab1, tab2, tab3, tab4, tab5, tab6 });
+        var tab6 = new TabPage(App.Messages.RepeatsGroup) { UseVisualStyleBackColor = true };
+        var tab7 = new TabPage(App.Messages.UpmixTab) { UseVisualStyleBackColor = true };
+        var tab3 = new TabPage("Output") { UseVisualStyleBackColor = true };
+        PageControl.TabPages.AddRange(new[] { WaveTab, FreqTab, tab5, tab7, tab6, tab3 });
 
-        MethodRadioGroup = MakeGroup("Extraction Method", 8, 8, 150, 140, 0,
-                                     "Frequency", "Waveform", "Centre + sides", "FindWithin");
-        MethodNeedsLabel = new ThemedLabel { Bounds = new Rectangle(166, 16, 300, 40) };
-        CentreRadioGroup = MakeGroup(App.Messages.CentreGroup, 8, 8, 464, 222, 0, App.Messages.CentreNames);
-        FindWithinBox = new VclGroupBox { Text = App.Messages.FindWithinGroup, Bounds = new Rectangle(8, 8, 306, 78), TabIndex = 0 };
+        FreqPages = new ThemedTabControl { Dock = DockStyle.Fill, TabIndex = 0, SizeMode = TabSizeMode.Normal };
+        FreqMainPage = new TabPage(App.Messages.MainPage) { UseVisualStyleBackColor = true };
+        FreqSettingsPage = new TabPage("Settings") { UseVisualStyleBackColor = true };
+        FreqPages.TabPages.AddRange(new[] { FreqMainPage, FreqSettingsPage });
+        FreqTab.Controls.Add(FreqPages);
+        WavePages = new ThemedTabControl { Dock = DockStyle.Fill, TabIndex = 0, SizeMode = TabSizeMode.Normal };
+        WaveMainPage = new TabPage(App.Messages.MainPage) { UseVisualStyleBackColor = true };
+        WaveSettingsPage = new TabPage("Settings") { UseVisualStyleBackColor = true };
+        WavePages.TabPages.AddRange(new[] { WaveMainPage, WaveSettingsPage });
+        WaveTab.Controls.Add(WavePages);
+
+        MethodRadioGroup = MakeGroup("Extraction Method", 8, 8, 150, 168, 0,
+                                     "Frequency", "Waveform", "Centre + sides", "Repeats", "Upmix");
+        CentreRadioGroup = MakeGroup(App.Messages.CentreGroup, 8, 8, 548, 222, 0, App.Messages.CentreNames);
+        RepeatsBox = new VclGroupBox { Text = App.Messages.RepeatsGroup, Bounds = new Rectangle(8, 8, 306, 78), TabIndex = 0 };
         var guideLabel = MakeLabel(App.Messages.RepeatGuideLabel, 10, 24);
         RepeatGuideCombo = new ComboBox { Bounds = new Rectangle(84, 20, 210, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 0 };
         RepeatGuideCombo.Items.AddRange(App.Messages.RepeatGuideNames);
         var searchLabel = MakeLabel(App.Messages.RepeatSearchLabel, 10, 50);
         RepeatSearchCombo = new ComboBox { Bounds = new Rectangle(84, 46, 210, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 1 };
         RepeatSearchCombo.Items.AddRange(App.Messages.RepeatSearchNames);
-        FindWithinBox.Controls.AddRange(new Control[] { guideLabel, RepeatGuideCombo, searchLabel, RepeatSearchCombo });
-        tab0.Controls.AddRange(new Control[] { MethodRadioGroup, MethodNeedsLabel });
+        RepeatsBox.Controls.AddRange(new Control[] { guideLabel, RepeatGuideCombo, searchLabel, RepeatSearchCombo });
         tab5.Controls.Add(CentreRadioGroup);
-        tab6.Controls.Add(FindWithinBox);
+        tab6.Controls.Add(RepeatsBox);
 
-        IntroRadioGroup = MakeGroup("Intro Analysis", 8, 8, 120, 128, 0,
-                                    "Automatic", "Normal", "Detailed", "None");
+        UpmixRadioGroup = MakeGroup(App.Messages.UpmixGroup, 8, 8, 330, 256, 0, App.Messages.UpmixNames);
+        UpmixLayoutLabel = MakeLabel(App.Messages.UpmixLayoutLabel, 348, 18);
+        UpmixLayoutCombo = new ComboBox { Bounds = new Rectangle(348, 36, 208, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 1 };
+        UpmixLayoutCombo.Items.AddRange(new object[] { "5.1", "7.1" });
+        UpmixLfeCheckBox = new ThemedCheckBox { Text = App.Messages.UpmixLfe, Bounds = new Rectangle(348, 64, 208, 17), TabIndex = 2 };
+        UpmixVocalLabel = MakeLabel(App.Messages.UpmixVocalLabel, 348, 94);
+        UpmixVocalCombo = new ComboBox { Bounds = new Rectangle(348, 112, 208, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 3 };
+        UpmixVocalCombo.Items.AddRange(App.Messages.UpmixVocalNames);
+        var upmixNote = new ThemedLabel { Text = App.Messages.UpmixNote, Bounds = new Rectangle(348, 142, 208, 88) };
+        tab7.Controls.AddRange(new Control[] { UpmixRadioGroup, UpmixLayoutLabel, UpmixLayoutCombo, UpmixLfeCheckBox, UpmixVocalLabel, UpmixVocalCombo, upmixNote });
 
-        var methodOptions = new VclGroupBox { Text = App.Messages.MethodOptions, Bounds = new Rectangle(135, 8, 338, 241), TabIndex = 2 };
+        // Frequency › Main
+        FreqModelRadioGroup = MakeGroup(App.Messages.FreqModelGroup, 8, 8, 270, 100, 0, App.Messages.FreqModelNames);
+        SoundQtyGroup = MakeGroup("Accuracy Priority", 8, 114, 270, 76, 1, "Quality", "Extraction");
+        KvolBox = new VclGroupBox { Text = "Extractable Level", Bounds = new Rectangle(8, 196, 270, 82), TabIndex = 2 };
+        KvolTrackBar = MakeTrackBar(10, 18, 200, 40, 0);
+        KvolText = MakeLabel("", 216, 30);
+        KvolWeak = MakeLabel("Weak", 14, 58);
+        KvolStrong = MakeLabel("Strong", 170, 58);
+        KvolBox.Controls.AddRange(new Control[] { KvolText, KvolWeak, KvolStrong, KvolTrackBar });
+        FreqMainPage.Controls.AddRange(new Control[] { FreqModelRadioGroup, SoundQtyGroup, KvolBox });
 
-        SoundQtyGroup = MakeGroup("Accuracy Priority", 144, 24, 321, 88, 3, "Quality", "Extraction");
-        LevelRadioGroup = MakeGroup("Instrumental Level Adjustment", 144, 126, 321, 115, 5,
-                                    "Automatic (Averaged)", "Automatic (Adaptive)", "Manual", "None");
+        // Frequency と Waveform の両方で使う部品。開いている方の page へ移す。
+        SharedMain = new Panel { Bounds = new Rectangle(286, 8, 270, 140), TabIndex = 3 };
+        AlignRadioGroup = MakeGroup(App.Messages.AlignGroup, 0, 0, 270, 90, 0, App.Messages.AlignNames);
+        MatchBandwidthCheckBox = new ThemedCheckBox { Text = App.Messages.MatchBandwidth, Bounds = new Rectangle(4, 98, 262, 17), TabIndex = 1 };
+        MatchLowEndCheckBox = new ThemedCheckBox { Text = App.Messages.MatchLowEnd, Bounds = new Rectangle(4, 118, 262, 17), TabIndex = 2 };
+        SharedMain.Controls.AddRange(new Control[] { AlignRadioGroup, MatchBandwidthCheckBox, MatchLowEndCheckBox });
 
-        Panel1 = new RaisedLine { Bounds = new Rectangle(144, 118, 322, 2) };
-
-        KvolTrackBar = MakeTrackBar(309, 56, 154, 40, 4);
-        KvolText = MakeLabel("", 377, 94);
-        KvolCaption = MakeLabel("Extractable Level", 345, 43);
-        KvolWeak = MakeLabel("Weak", 312, 91);
-        KvolStrong = MakeLabel("Strong", 427, 91);
-
-        KlvlTrackBar = MakeTrackBar(309, 184, 154, 40, 6);
-        KlvlText = MakeLabel("", 374, 220);
-
-        AdptLvlGroupBox = new VclGroupBox { Text = "Time Shift Correction", Bounds = new Rectangle(8, 142, 120, 107), TabIndex = 1 };
+        SharedSettings = new Panel { Bounds = new Rectangle(8, 8, 370, 250), TabIndex = 0 };
+        IntroRadioGroup = MakeGroup("Intro Analysis", 0, 0, 120, 128, 0, "Automatic", "Normal", "Detailed", "None");
+        AdptLvlGroupBox = new VclGroupBox { Text = "Time Shift Correction", Bounds = new Rectangle(0, 134, 120, 107), TabIndex = 1 };
         AdptAutoButton = new ThemedRadioButton { Text = "Automatic", Bounds = new Rectangle(7, 18, 91, 17), TabIndex = 0 };
         AdptManualButton = new ThemedRadioButton { Text = "Manual", Bounds = new Rectangle(7, 46, 91, 17), TabIndex = 1 };
         // Edit + UpDown は 1 組として扱い、最大 999。
         AdptUpDown = new NumericUpDown { Bounds = new Rectangle(63, 75, 51, 20), Minimum = 0, Maximum = 999, TabIndex = 2 };
         var rangeLabel = MakeLabel("Range", 10, 79);
         AdptLvlGroupBox.Controls.AddRange(new Control[] { AdptAutoButton, AdptManualButton, AdptUpDown, rangeLabel });
-
-        tab1.Controls.AddRange(new Control[]
-        {
-            Panel1, KvolText, KvolCaption, KvolWeak, KvolStrong, KvolTrackBar,
-            KlvlText, KlvlTrackBar, SoundQtyGroup, LevelRadioGroup,
-            IntroRadioGroup, AdptLvlGroupBox, methodOptions,
-        });
-        methodOptions.SendToBack();
-
-        DataRadioGroup = MakeGroup("Processing Mode", 8, 8, 102, 101, 0, "Normal", "L/R Difference", "Mono");
-        PhaseRadioGroup = MakeGroup("Instrumental Phase", 8, 115, 102, 101, 1,
-                                    "Automatic", "Positive Phase", "Inverted Phase");
-
-        FilterBox = new VclGroupBox { Text = "Filtering", Bounds = new Rectangle(116, 8, 224, 246), TabIndex = 2 };
-        CfocusCheckBox = new ThemedCheckBox { Text = "Extraction Centralization", Bounds = new Rectangle(16, 21, 125, 17), TabIndex = 0, AutoSize = true };
-        CfocusTrackBar = MakeTrackBar(25, 44, 153, 40, 1);
-        CfocusText = MakeLabel("", 180, 56);
-        CfWeak = MakeLabel("Weak", 28, 79);
-        CfStrong = MakeLabel("Strong", 164, 79);
-        LPFCheckBox = new ThemedCheckBox { Text = "Low Pass Filter", Bounds = new Rectangle(16, 100, 110, 17), TabIndex = 2 };
-        LPFTrackBar = MakeTrackBar(25, 123, 153, 40, 3);
-        // 右寄せ AutoSize label は右端位置を固定する。
-        LPFLabel = new VclLabel(rightJustify: true) { Text = "10.0kHz", Bounds = new Rectangle(178, 137, 39, 12) };
-        HPFCheckBox = new ThemedCheckBox { Text = "High Pass Filter", Bounds = new Rectangle(16, 180, 110, 17), TabIndex = 4 };
-        HPFTrackBar = MakeTrackBar(25, 203, 153, 40, 5);
-        HPFLabel = new VclLabel(rightJustify: true) { Text = "100Hz", Bounds = new Rectangle(180, 217, 31, 12) };
-        FilterBox.Controls.AddRange(new Control[]
-        {
-            CfocusText, CfWeak, CfStrong, LPFLabel, HPFLabel,
-            CfocusCheckBox, CfocusTrackBar, LPFCheckBox, LPFTrackBar, HPFCheckBox, HPFTrackBar,
-        });
-
-        OvspBox = new VclGroupBox { Text = "Oversampling", Bounds = new Rectangle(346, 8, 126, 88), TabIndex = 3 };
-        OvspCheckBox = new ThemedCheckBox { Text = "Multiplier:", Bounds = new Rectangle(11, 16, 110, 17), TabIndex = 0 };
-        OvspComboBox = new ComboBox { Bounds = new Rectangle(31, 39, 57, 20), MaxLength = 3, TabIndex = 1 };
-        OvspComboBox.Items.AddRange(new object[] { "8", "16", "32", "64", "128" });
-        var ovspNote = new ThemedLabel
-        {
-            Text = "(For \"Waveform\" Method)", Bounds = new Rectangle(8, 62, 110, 24),
-            TextAlign = ContentAlignment.TopCenter,
-        };
-        OvspBox.Controls.AddRange(new Control[] { OvspCheckBox, OvspComboBox, ovspNote });
-
-        BsizeBox = new VclGroupBox { Text = "Block Length", Bounds = new Rectangle(346, 100, 126, 48), TabIndex = 4 };
+        DataRadioGroup = MakeGroup("Processing Mode", 128, 0, 110, 101, 2, "Normal", "L/R Difference", "Mono");
+        PhaseRadioGroup = MakeGroup("Instrumental Phase", 128, 107, 110, 101, 3, "Automatic", "Positive Phase", "Inverted Phase");
+        BsizeBox = new VclGroupBox { Text = "Block Length", Bounds = new Rectangle(246, 0, 124, 48), TabIndex = 4 };
         BsizeComboBox = new ComboBox { Bounds = new Rectangle(11, 20, 50, 20), MaxLength = 3, TabIndex = 0 };
         BsizeComboBox.Items.AddRange(new object[] { "50", "100", "200", "400", "800" });
         // "Millseconds" の typo は元実装どおり残す。
         var bsizeUnit = MakeLabel("Millseconds", 66, 24);
         BsizeBox.Controls.AddRange(new Control[] { BsizeComboBox, bsizeUnit });
+        // GPU の group は v3 にない。
+        var gpuBox = new VclGroupBox { Text = App.Messages.GpuGroup, Bounds = new Rectangle(246, 54, 124, 102), TabIndex = 5 };
+        GpuCheckBox = new ThemedCheckBox { Text = App.Messages.GpuUse, Bounds = new Rectangle(11, 16, 108, 17), TabIndex = 0 };
+        GpuExactButton = new ThemedRadioButton { Text = App.Messages.GpuExact, Bounds = new Rectangle(23, 34, 96, 17), TabIndex = 1 };
+        GpuFastButton = new ThemedRadioButton { Text = App.Messages.GpuFastest, Bounds = new Rectangle(23, 52, 96, 17), TabIndex = 2 };
+        GpuStatusLabel = new ThemedLabel { Text = App.Messages.GpuChecking, Bounds = new Rectangle(8, 71, 110, 28), AutoEllipsis = true };
+        gpuBox.Controls.AddRange(new Control[] { GpuCheckBox, GpuExactButton, GpuFastButton, GpuStatusLabel });
+        SharedSettings.Controls.AddRange(new Control[] { IntroRadioGroup, AdptLvlGroupBox, DataRadioGroup, PhaseRadioGroup, BsizeBox, gpuBox });
+        FreqMainPage.Controls.Add(SharedMain);
+        FreqSettingsPage.Controls.Add(SharedSettings);
 
+        // Waveform › Main
+        ModelRadioGroup = MakeGroup(App.Messages.ModelGroup, 8, 8, 270, 270, 0, App.Messages.ModelNames);
 
-        var fileBox = new VclGroupBox { Text = "File Name Settings", Bounds = new Rectangle(8, 8, 225, 138), TabIndex = 0 };
-        KnameCheckBox = new ThemedCheckBox { Text = "Search For Instrumental File", Bounds = new Rectangle(16, 24, 200, 17), TabIndex = 0 };
-        VnameCheckBox = new ThemedCheckBox { Text = "Automatically Name Output File", Bounds = new Rectangle(16, 55, 200, 17), TabIndex = 1 };
+        SpansBox = new VclGroupBox { Text = App.Messages.SpansGroup, Bounds = new Rectangle(286, 154, 270, 82), TabIndex = 4 };
+        SpansEdit = new TextBox { Bounds = new Rectangle(10, 20, 250, 20), MaxLength = 250, TabIndex = 0 };
+        var spansHint = new ThemedLabel { Text = App.Messages.SpansHint, Bounds = new Rectangle(10, 44, 252, 34) };
+        SpansBox.Controls.AddRange(new Control[] { SpansEdit, spansHint });
+        var modelNote = new ThemedLabel { Text = App.Messages.ModelNote, Bounds = new Rectangle(290, 242, 266, 30) };
+        WaveMainPage.Controls.AddRange(new Control[] { ModelRadioGroup, SpansBox, modelNote });
+
+        // Waveform › Settings
+        OvspBox = new VclGroupBox { Text = "Oversampling", Bounds = new Rectangle(386, 8, 170, 70), TabIndex = 1 };
+        OvspCheckBox = new ThemedCheckBox { Text = "Multiplier:", Bounds = new Rectangle(11, 20, 90, 17), TabIndex = 0 };
+        OvspComboBox = new ComboBox { Bounds = new Rectangle(31, 42, 57, 20), MaxLength = 3, TabIndex = 1 };
+        OvspComboBox.Items.AddRange(new object[] { "8", "16", "32", "64", "128" });
+        OvspBox.Controls.AddRange(new Control[] { OvspCheckBox, OvspComboBox });
+        LevelRadioGroup = MakeGroup("Instrumental Level Adjustment", 386, 84, 170, 114, 2,
+                                    "Automatic (Averaged)", "Automatic (Adaptive)", "Manual", "None");
+        KlvlTrackBar = MakeTrackBar(386, 204, 150, 40, 3);
+        KlvlText = MakeLabel("", 420, 244);
+        WaveSettingsPage.Controls.AddRange(new Control[] { OvspBox, LevelRadioGroup, KlvlTrackBar, KlvlText });
+
+        // Output
+        var fileBox = new VclGroupBox { Text = "File Name Settings", Bounds = new Rectangle(8, 8, 270, 138), TabIndex = 0 };
+        KnameCheckBox = new ThemedCheckBox { Text = "Search For Instrumental File", Bounds = new Rectangle(16, 24, 240, 17), TabIndex = 0 };
+        VnameCheckBox = new ThemedCheckBox { Text = "Automatically Name Output File", Bounds = new Rectangle(16, 55, 240, 17), TabIndex = 1 };
         AppendLabel = MakeLabel("Append To Filename:", 16, 80);
-        VnameEdit = new TextBox { Bounds = new Rectangle(125, 78, 81, 20), MaxLength = 32, TabIndex = 3 };
+        VnameEdit = new TextBox { Bounds = new Rectangle(150, 78, 100, 20), MaxLength = 32, TabIndex = 3 };
         fileBox.Controls.AddRange(new Control[] { KnameCheckBox, VnameCheckBox, AppendLabel, VnameEdit });
         tab3.Controls.Add(fileBox);
 
-        // Misc tab の空きに出力の group を置く。位置と部品の大きさは既存 group に揃えている。
         // 1 行目は出力するもの (声か、原曲と揃えたインストの組か)。v3 にない。
-        var outBox = new VclGroupBox { Text = App.Messages.OutputGroup, Bounds = new Rectangle(240, 8, 232, 138), TabIndex = 1 };
+        var outBox = new VclGroupBox { Text = App.Messages.OutputGroup, Bounds = new Rectangle(286, 8, 270, 138), TabIndex = 1 };
         var kindLabel = MakeLabel(App.Messages.OutputKindLabel, 12, 26);
-        OutKindCombo = new ComboBox { Bounds = new Rectangle(84, 22, 136, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 0 };
-        OutKindCombo.Items.AddRange(App.Messages.OutputKindNames);
+        SaveDropDown = new CheckDropDown { Bounds = new Rectangle(94, 22, 164, 20), TabIndex = 0, Choices = App.Messages.SaveNames };
         var fmtLabel = MakeLabel("Format:", 12, 54);
-        OutFormatCombo = new ComboBox { Bounds = new Rectangle(84, 50, 136, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 1 };
+        OutFormatCombo = new ComboBox { Bounds = new Rectangle(94, 50, 164, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 1 };
         OutFormatCombo.Items.AddRange(App.Messages.FormatNames);
         var depthLabel = MakeLabel("Bit Depth:", 12, 82);
-        OutDepthCombo = new ComboBox { Bounds = new Rectangle(84, 78, 136, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 2 };
+        OutDepthCombo = new ComboBox { Bounds = new Rectangle(94, 78, 164, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 2 };
         OutDepthCombo.Items.AddRange(new object[] { "Auto", "16-bit", "24-bit", "32-bit float" });
         var rateLabel = MakeLabel("Bitrate:", 12, 110);
-        OutBitrateCombo = new ComboBox { Bounds = new Rectangle(84, 106, 136, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 3 };
+        OutBitrateCombo = new ComboBox { Bounds = new Rectangle(94, 106, 164, 20), DropDownStyle = ComboBoxStyle.DropDownList, TabIndex = 3 };
         OutBitrateCombo.Items.AddRange(new object[] { "96 kbps", "128 kbps", "160 kbps", "192 kbps", "256 kbps", "320 kbps" });
-        outBox.Controls.AddRange(new Control[] { kindLabel, OutKindCombo, fmtLabel, OutFormatCombo, depthLabel, OutDepthCombo, rateLabel, OutBitrateCombo });
+        outBox.Controls.AddRange(new Control[] { kindLabel, SaveDropDown, fmtLabel, OutFormatCombo, depthLabel, OutDepthCombo, rateLabel, OutBitrateCombo });
         tab3.Controls.Add(outBox);
 
+        // 後処理は出力にかかるので Output に置く。左に on/off、右にその強さ。
+        FilterBox = new VclGroupBox { Text = "Filtering", Bounds = new Rectangle(8, 152, 548, 156), TabIndex = 2 };
+        CfocusCheckBox = new ThemedCheckBox { Text = "Extraction Centralization", Bounds = new Rectangle(12, 24, 226, 17), TabIndex = 0 };
+        CfocusTrackBar = MakeTrackBar(244, 14, 220, 40, 1);
+        CfocusText = MakeLabel("", 470, 26);
+        CfWeak = MakeLabel("Weak", 248, 46);
+        CfStrong = MakeLabel("Strong", 426, 46);
+        LPFCheckBox = new ThemedCheckBox { Text = "Low Pass Filter", Bounds = new Rectangle(12, 72, 226, 17), TabIndex = 2 };
+        LPFTrackBar = MakeTrackBar(244, 62, 220, 40, 3);
+        // 右寄せ AutoSize label は右端位置を固定する。
+        LPFLabel = new VclLabel(rightJustify: true) { Text = "10.0kHz", Bounds = new Rectangle(470, 74, 50, 12) };
+        HPFCheckBox = new ThemedCheckBox { Text = "High Pass Filter", Bounds = new Rectangle(12, 112, 226, 17), TabIndex = 4 };
+        HPFTrackBar = MakeTrackBar(244, 104, 220, 40, 5);
+        HPFLabel = new VclLabel(rightJustify: true) { Text = "100Hz", Bounds = new Rectangle(470, 116, 50, 12) };
+        SubsonicCheckBox = new ThemedCheckBox { Text = App.Messages.RemoveSubsonic, Bounds = new Rectangle(12, 132, 226, 17), TabIndex = 6 };
+        FilterBox.Controls.AddRange(new Control[]
+        {
+            CfocusText, CfWeak, CfStrong, LPFLabel, HPFLabel,
+            CfocusCheckBox, CfocusTrackBar, LPFCheckBox, LPFTrackBar, HPFCheckBox, HPFTrackBar, SubsonicCheckBox,
+        });
+        tab3.Controls.Add(FilterBox);
 
-        // GPU の group は v3 にない。Misc tab 下段の空きに、上の 2 group と同じ幅でまとめて置く。
-        var gpuBox = new VclGroupBox { Text = App.Messages.GpuGroup, Bounds = new Rectangle(346, 152, 126, 102), TabIndex = 5 };
-        GpuCheckBox = new ThemedCheckBox { Text = App.Messages.GpuUse, Bounds = new Rectangle(11, 16, 110, 17), TabIndex = 0 };
-        GpuExactButton = new ThemedRadioButton { Text = App.Messages.GpuExact, Bounds = new Rectangle(23, 34, 98, 17), TabIndex = 1 };
-        GpuFastButton = new ThemedRadioButton { Text = App.Messages.GpuFastest, Bounds = new Rectangle(23, 52, 98, 17), TabIndex = 2 };
-        GpuStatusLabel = new ThemedLabel { Text = App.Messages.GpuChecking, Bounds = new Rectangle(8, 71, 112, 28), AutoEllipsis = true };
-        gpuBox.Controls.AddRange(new Control[] { GpuCheckBox, GpuExactButton, GpuFastButton, GpuStatusLabel });
-        tab2.Controls.AddRange(new Control[] { DataRadioGroup, PhaseRadioGroup, FilterBox, OvspBox, BsizeBox, gpuBox });
-
-        // Waveform の代替モデル (v3 にない)。左にモデル、右に位置合わせと声の無い区間を置く。
-        ModelRadioGroup = MakeGroup(App.Messages.ModelGroup, 8, 8, 270, 222, 0, App.Messages.ModelNames);
-        ModelRadioGroup.Scrollable = true;
-        AlignRadioGroup = MakeGroup(App.Messages.AlignGroup, 286, 8, 186, 90, 1, App.Messages.AlignNames);
-        SpansBox = new VclGroupBox { Text = App.Messages.SpansGroup, Bounds = new Rectangle(286, 104, 186, 104), TabIndex = 2 };
-        SpansEdit = new TextBox { Bounds = new Rectangle(10, 20, 166, 20), MaxLength = 250, TabIndex = 0 };
-        var spansHint = new ThemedLabel { Text = App.Messages.SpansHint, Bounds = new Rectangle(10, 46, 168, 54) };
-        SpansBox.Controls.AddRange(new Control[] { SpansEdit, spansHint });
-        var modelNote = new ThemedLabel { Text = App.Messages.ModelNote, Bounds = new Rectangle(10, 236, 460, 16) };
-        KickDuckCheckBox = new ThemedCheckBox { Text = App.Messages.KickDuck, Bounds = new Rectangle(290, 213, 182, 17), TabIndex = 3 };
-        tab4.Controls.AddRange(new Control[] { ModelRadioGroup, AlignRadioGroup, SpansBox, KickDuckCheckBox, modelNote });
-
+        // 方式を選ぶ専用 tab は無い。各方式の tab の上に「この方式を使う」を置く (MethodRadioGroup は状態だけを持つ)。
+        foreach (var page in new[] { tab5, tab6, tab7 })
+            foreach (Control child in page.Controls) child.Top += 32;
+        var methodPages = new[] { FreqTab, WaveTab, tab5, tab6, tab7 };
+        UseMethodButtons = new ThemedRadioButton[methodPages.Length];
+        NeedsLabels = new Label[methodPages.Length];
+        for (int k = 0; k < methodPages.Length; ++k)
+        {
+            var header = new Panel { Dock = DockStyle.Top, Height = 30 };
+            UseMethodButtons[k] = new ThemedRadioButton { Text = App.Messages.UseMethod, Location = new Point(10, 7), AutoSize = true, TabIndex = 0 };
+            NeedsLabels[k] = new ThemedLabel { Location = new Point(250, 9), AutoSize = true };
+            header.Controls.AddRange(new Control[] { UseMethodButtons[k], NeedsLabels[k] });
+            methodPages[k].Controls.Add(header);
+        }
+        FreqPages.BringToFront();
+        WavePages.BringToFront();
 
         Controls.AddRange(new Control[] { OkBitBtn, CanBitBtn, PageControl, ResetButton });
 

@@ -8,15 +8,20 @@
 #include "algorithms/refcancel/rc.h"
 #include "algorithms/hardpair/hp.h"
 #include "algorithms/centresides/cs.h"
-#include "algorithms/findwithin/fw.h"
+#include "algorithms/repeats/fw.h"
+#include "algorithms/bandwidth/bw.h"
+#include "algorithms/lowend/lowend.h"
+#include "algorithms/upmix/upmix.h"
+#include "fileio.h"
 #include "parallel.h"
 #include "log.h"
 
 #include <algorithm>
+#include <cctype>
+#include <atomic>
 #include <cmath>
 #include <limits>
 #include <cstdio>
-#include <cstdlib>
 #include <filesystem>
 #include <system_error>
 
@@ -275,6 +280,20 @@ struct Candidate {
     bool scored = true;
 };
 
+AudioBuffer bufferOf(const rc::Audio& a, int rate) {
+    AudioBuffer b;
+    b.sampleRate = rate;
+    b.channels = a.channels;
+    b.samples = a.v;
+    return b;
+}
+
+std::string slug(const std::string& name) {
+    std::string out = "_";
+    for (char ch : name) out += (ch == ' ' || ch == '-') ? '_' : static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return out;
+}
+
 rc::Audio consensusOf(const rc::Audio& mix, const std::vector<const rc::Audio*>& backgrounds, const rc::Audio& baseline,
                       int rate, const rc::Config& cfg, double strength) {
     const std::size_t len = mix.frames();
@@ -380,9 +399,11 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
     std::vector<char> valid;
     float engineFrom = from;
     std::string alignInfo;
-    const bool kick = settings.kickDuck && ch == 2;
-    if (settings.kickDuck && ch != 2) log::warn("  kick duck matching skipped: it needs a stereo original and instrumental");
-    const bool prealign = algorithm || multi || kick;
+    const bool keepRaw = (settings.saveMask & kSaveRaw) != 0;
+    const bool keepMembers = (settings.saveMask & kSaveMembers) != 0;
+    cfg.keepMembers = keepMembers;
+    std::vector<std::pair<std::string, AudioBuffer>> members;
+    const bool prealign = algorithm || multi;
 
     auto alignV3 = [&]() {
         cfg.alignment = 0;
@@ -479,44 +500,21 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
         return res;
     }
 
-    if (kick) {
-        log::Stage st("kick duck matching");
-        try {
-            const hp::KickDuck k = hp::kickDuck(mix, ref, rate);
-            log::detail("  %d kicks, dip %.2f dB, attack %.1f ms, release %.1f ms, strength %.2f, held-out change %+.2f dB",
-                        k.kicks, k.depthDb, k.attackMs, k.releaseMs, k.strength, k.changeDb);
-            if (k.strength > 0.0) {
-                hp::applyGainDb(ref, k.gainDb);
-                char kb[64];
-                std::snprintf(kb, sizeof kb, " kickduck:%.2fdBx%.2f", k.depthDb, k.strength);
-                alignInfo += kb;
-            } else {
-                log::detail("  no repeatable kick ducking found; the instrumental is left as it is");
-            }
-        } catch (const std::exception& e) {
-            log::warn("  kick duck matching skipped: %s", e.what());
-        }
-        if (progress && !progress(engineFrom, progressUser)) {
-            res.cancelled = true;
-            return res;
-        }
-    }
-
     rc::Audio estimate;
     char buf[400];
     bool cancelled = false;
     log::Stage modelStage(name + (autoPick ? "" : " algorithm") + (autoPick ? "" : alignSuffix(align)));
     if (multi) {
         static const std::pair<rc::Method, const char*> rcSet[] = {{rc::Method::Robust, "Robust"}, {rc::Method::Kalman, "Kalman"},
-                                                                    {rc::Method::Hammerstein, "Hammerstein"}, {rc::Method::Nmf, "NMF"},
-                                                                    {rc::Method::Spatial, "Spatial"}};
-        static const int rcRank[] = {0, 2, 3, -1, -1};
+                                                                    {rc::Method::Hammerstein, "Hammerstein"}};
+        static const int rcRank[] = {0, 2, 3};
+        constexpr int rcCount = 3;
         const bool stereo = ch == 2;
-        const double units = 5.0 + (stereo ? 3.0 : 0.0);
+        const double units = rcCount + (stereo ? 3.0 : 0.0);
         const float span = 0.93f - engineFrom;
         std::vector<Candidate> cands;
         int robust = -1;
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < rcCount; ++i) {
             const float a = engineFrom + span * static_cast<float>(i / units), b = engineFrom + span * static_cast<float>((i + 1) / units);
             log::detail("  running %s", rcSet[i].second);
             rc::Result r;
@@ -550,7 +548,7 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
             return res;
         }
         if (stereo) {
-            const float a = engineFrom + span * static_cast<float>(5.0 / units);
+            const float a = engineFrom + span * static_cast<float>(rcCount / units);
             log::detail("  running Rational, Surface, Trend, CTF and Low-rank");
             try {
                 hp::Result r = hp::separate(mix, ref, rate, {hp::Method::Rational, hp::Method::Surface, hp::Method::Trend, hp::Method::Ctf, hp::Method::LowRank},
@@ -588,6 +586,8 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
         rc::Audio large = consensusOf(mix, all, cands[static_cast<std::size_t>(robust)].background, rate, cfg, kLargeStrength);
         for (const auto& cd : cands)
             log::detail("    %-12s %6.1f dB from the consensus", cd.name.c_str(), distanceDb(cd.background, large));
+        if (keepMembers)
+            for (const auto& cd : cands) members.emplace_back(slug(cd.name), bufferOf(subtractAudio(mix, cd.background), rate));
 
         std::string pickName = "Ensemble Large";
         if (autoPick) {
@@ -622,6 +622,10 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
                 log::detail("  Auto: mono input has no stereo difference to compare by; using Ensemble Small");
             }
             log::line("  Auto picked %s", pick->name.c_str());
+            if (keepMembers) {
+                members.emplace_back(slug(smallC.name), bufferOf(subtractAudio(mix, smallC.background), rate));
+                members.emplace_back(slug(largeC.name), bufferOf(subtractAudio(mix, largeC.background), rate));
+            }
             pickName = pick->name;
             estimate = subtractAudio(mix, pick->background);
         } else {
@@ -686,8 +690,11 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
                       r.calibration.hasNonlinear ? (r.calibration.nonlinearAccepted ? " nonlinear:accepted" : " nonlinear:rejected") : "",
                       cfg.fitSpans.empty() ? "" : " spans:yes");
         estimate = std::move(r.estimate);
+        for (auto& [memberName, audio] : r.members) members.emplace_back(slug(memberName), bufferOf(audio, rate));
     }
     res.alignment.model = buf;
+    if (keepRaw) res.extras.emplace_back("_raw", bufferOf(estimate, rate));
+    for (auto& m : members) res.extras.push_back(std::move(m));
 
     // 元の後処理を通して書き出す。
     v3::Context post;
@@ -846,7 +853,7 @@ void alignedPairPaths(const std::string& output, std::string& mainPath, std::str
 }
 
 void outputPaths(const std::string& output, OutputKind kind, std::string& first, std::string& second) {
-    if (kind != OutputKind::CenterSides && kind != OutputKind::Repeats) {
+    if (kind != OutputKind::CenterSides && kind != OutputKind::Repeats && kind != OutputKind::Upmix) {
         alignedPairPaths(output, first, second);
         return;
     }
@@ -855,6 +862,13 @@ void outputPaths(const std::string& output, OutputKind kind, std::string& first,
     const bool hasExt = dot != std::string::npos && (slash == std::string::npos || dot > slash);
     const std::string stem = hasExt ? output.substr(0, dot) : output;
     const std::string ext = hasExt ? output.substr(dot) : "";
+    if (kind == OutputKind::Upmix) {
+        std::string lower = ext;
+        for (char& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        const bool multichannel = lower == ".wav" || lower == ".flac" || lower == ".aiff" || lower == ".aif";
+        first = second = stem + "_upmix" + (multichannel ? ext : std::string(".wav"));
+        return;
+    }
     if (kind == OutputKind::Repeats) {
         first = stem + "_repeats";
         second = first + (slash == std::string::npos ? std::string("/") : output.substr(slash, 1)) + "repeats.csv";
@@ -1045,12 +1059,71 @@ RepeatsResult extractRepeats(const AudioBuffer& original, const Settings& settin
     return res;
 }
 
+namespace {
+
+bw::Worse matchBandwidth(const AudioBuffer& orig, const AudioBuffer& inst, const AudioInfo* oi, const AudioInfo* ii, AudioBuffer& modified) {
+    const double sr = orig.sampleRate;
+    const bw::Profile po = bw::analyse(orig.samples, orig.channels, sr), pi = bw::analyse(inst.samples, inst.channels, sr);
+    bw::Source so, si;
+    if (oi) { so.lossy = !oi->lossless && oi->bitrateKbps <= 1000; so.kbps = oi->bitrateKbps; }
+    if (ii) { si.lossy = !ii->lossless && ii->bitrateKbps <= 1000; si.kbps = ii->bitrateKbps; }
+    const bw::Report r = bw::decide(po, pi, so, si);
+    double score = 0;
+    const long long lag = bw::estimateLag(po, pi, score);
+    auto nativeRate = [&](const AudioInfo* info) { return info && info->sampleRate > 0 ? info->sampleRate : orig.sampleRate; };
+    auto pct = [](double share) { return static_cast<int>(std::lround(share * 100)); };
+    auto describe = [&](const char* who, const AudioInfo* info, double hz, double share, double evidence) {
+        char kb[32] = "";
+        if (info && !info->lossless && info->bitrateKbps > 0) std::snprintf(kb, sizeof kb, " %d kbps", info->bitrateKbps);
+        std::string what = "no cutoff found";
+        if (share >= 0.3) {
+            what = std::to_string(static_cast<int>(std::lround(hz))) + " Hz cutoff in " + std::to_string(pct(share)) +
+                   (evidence < 1.0 ? "% of the frames with content up there" : "% of frames");
+            if (hz >= 0.475 * nativeRate(info)) what += " (the limit of its " + std::to_string(nativeRate(info)) + " Hz sample rate)";
+        }
+        log::detail("  %s: %s%s, %s", who, info ? info->codec.c_str() : "?", kb, what.c_str());
+    };
+    describe("original", oi, po.typicalHz, po.cliffShare, po.evidenceShare);
+    describe("instrumental", ii, pi.typicalHz, pi.cliffShare, pi.evidenceShare);
+    log::detail("  timing: instrumental frame lag %.2f s (match %.2f)", static_cast<double>(lag) * po.hop / sr, score);
+    if (r.worse == bw::Worse::None) {
+        log::detail("  both files carry about the same amount of real data; nothing was changed");
+        return bw::Worse::None;
+    }
+    const bool origWorse = r.worse == bw::Worse::Original;
+    const char* worseName = origWorse ? "original" : "instrumental";
+    const char* betterName = origWorse ? "instrumental" : "original";
+    const bw::Profile& worse = origWorse ? po : pi;
+    const bw::Profile& better = origWorse ? pi : po;
+    const double need = origWorse ? 0.3 : 0.5;
+    if (worse.cliffShare < need) {
+        log::detail("  the %s has less real data, but its cutoff shows in only %d%% of frames (%d%% needed), too unsteady to follow; the %s was left unchanged",
+                    worseName, pct(worse.cliffShare), pct(need), betterName);
+        return bw::Worse::None;
+    }
+    modified = origWorse ? inst : orig;
+    const std::vector<double> curve = bw::curveFor(worse, better, r.worse, lag);
+    const double removed = bw::lowpassToCurve(modified.samples, modified.channels, sr, curve, better.nFft, better.hop);
+    if (removed <= -299) {
+        log::detail("  the %s's cutoff sits at the top of the band; the %s was left unchanged", worseName, betterName);
+        return bw::Worse::None;
+    }
+    const double lo = *std::min_element(curve.begin(), curve.end()), hi = *std::max_element(curve.begin(), curve.end());
+    log::detail("  the %s has less real data; lowpassed the %s to follow its cutoff (%.0f-%.0f Hz); what was removed sits %.1f dB below the %s",
+                worseName, betterName, lo, hi, -removed, betterName);
+    return r.worse;
+}
+
+}
+
 ExtractResult extract(const AudioBuffer& original,
                       const AudioBuffer& instrumentalIn,
                       const Settings& settings,
                       bool quantize16,
                       ProgressFn progress,
-                      void* progressUser) {
+                      void* progressUser,
+                      const AudioInfo* originalInfo,
+                      const AudioInfo* instrumentalInfo) {
     const X87Extended fpu;
     ExtractResult res;
     res.instrumentalRateIn = instrumentalIn.sampleRate;
@@ -1089,32 +1162,149 @@ ExtractResult extract(const AudioBuffer& original,
         instPtr = &instConformed;
     }
 
-    const std::vector<float> o = toInt16Scale(orig, quantize16);
+    AudioBuffer matched;
+    const AudioBuffer* origPtr = &orig;
+    if (settings.matchBandwidth && settings.outputKind == OutputKind::Vocal) {
+        log::Stage ls("match lowest bandwidth");
+        const bw::Worse w = matchBandwidth(orig, *instPtr, originalInfo, instrumentalInfo, matched);
+        if (w == bw::Worse::Original) instPtr = &matched;
+        else if (w == bw::Worse::Instrumental) origPtr = &matched;
+    }
+    const AudioBuffer& src = *origPtr;
+
+    AudioBuffer prealigned;
+    if (settings.mergeMode == MergeMode::ByFrequency && settings.freqModel == 0 && settings.waveAlign != WaveAlign::V3Block &&
+        settings.outputKind == OutputKind::Vocal) {
+        const bool dense = settings.waveAlign == WaveAlign::Dense;
+        if (dense && ch != 2) {
+            log::warn("  the dense time map needs a stereo original and instrumental; using Utagoe v3 analysis");
+        } else {
+            log::Stage ls(dense ? "dense time map" : "cross-correlation alignment");
+            rc::Audio mixA, refA;
+            mixA.channels = refA.channels = ch;
+            mixA.v = src.samples;
+            refA.v = instPtr->samples;
+            bool cancelled = false;
+            bool ok = true;
+            if (dense) {
+                try {
+                    hp::TimeMap map;
+                    refA = hp::alignDense(mixA, refA, rate, map, hpProgress(progress, progressUser, 0.0f, 0.1f, cancelled), cancelled);
+                } catch (const std::exception& e) {
+                    log::warn("  dense time map failed (%s); using Utagoe v3 analysis", e.what());
+                    ok = false;
+                }
+                log::clearStatus(1);
+            } else {
+                GccAligned g;
+                std::string err;
+                if (gccAlign(mixA, refA, rate, src.frames(), g, err)) {
+                    refA = std::move(g.warped);
+                } else {
+                    log::warn("  cross-correlation alignment failed (%s); using Utagoe v3 analysis", err.c_str());
+                    ok = false;
+                }
+            }
+            if (cancelled) {
+                res.cancelled = true;
+                return res;
+            }
+            if (ok) {
+                prealigned.sampleRate = rate;
+                prealigned.channels = ch;
+                prealigned.samples = std::move(refA.v);
+                prealigned.samples.resize(src.samples.size(), 0.0f);
+                instPtr = &prealigned;
+            }
+        }
+    }
+
+    AudioBuffer lowMatched;
+    const AudioBuffer* instBeforeLowEnd = instPtr;
+    float lowTo = -1.0f;
+    const bool cutSubsonic = settings.removeSubsonic && settings.outputKind == OutputKind::Vocal;
+    if (settings.matchLowEnd && settings.outputKind == OutputKind::Vocal) {
+        log::Stage ls("match low end");
+        lowMatched.sampleRate = instPtr->sampleRate;
+        lowMatched.channels = instPtr->channels;
+        const float lowFrom = conform ? 0.10f : 0.0f;
+        lowTo = lowFrom + 0.15f;
+        Stage st{progress, progressUser, lowFrom, lowTo, true};
+        const lowend::Report lr = lowend::match(src.samples, instPtr->samples, ch, rate, lowMatched.samples,
+                                                [&](double f) { return st.report(static_cast<float>(f)); });
+        log::clearStatus(3);
+        if (lr.cancelled) {
+            res.cancelled = true;
+            return res;
+        }
+        if (lr.applied) {
+            log::detail("  low end lined up: phase %+.1f / %+.1f / %+.1f / %+.1f deg at 30 / 60 / 100 / 200 Hz, gain %+.2f / %+.2f / %+.2f dB; "
+                        "kick and bass would have leaked at %.1f dB (%d segments, lag %.1f samples, drift %.2f ppm); bass ride %s %+.2f..%+.2f dB",
+                        lr.phase30, lr.phase60, lr.phase100, lr.phase200, lr.gain30Db, lr.gain60Db, lr.gain100Db, lr.predictedLeakDb, lr.segments, lr.lagSamples, lr.driftPpm, lr.rode ? "followed" : "not needed", lr.ride5Db, lr.ride95Db);
+            instPtr = &lowMatched;
+        } else {
+            log::detail("  low end left as is: %s", lr.reason);
+        }
+    }
+
+    const std::vector<float> o = toInt16Scale(src, quantize16);
     const std::vector<float> i = toInt16Scale(*instPtr, quantize16);
+    const std::vector<float> iAnalysis = instPtr == &lowMatched ? toInt16Scale(*instBeforeLowEnd, quantize16) : std::vector<float>{};
 
     v3::Context c;
     c.channels = ch;
     c.rate = rate;
     c.quantize = quantize16;
     c.p = v3::toParams(settings, ch);
-    c.orig = {o.data(), static_cast<long long>(orig.frames()), ch, 0};
+    c.orig = {o.data(), static_cast<long long>(src.frames()), ch, 0};
     c.inst = {i.data(), static_cast<long long>(instPtr->frames()), ch, 0};
+    if (!iAnalysis.empty()) {
+        c.analysisInst = {iAnalysis.data(), static_cast<long long>(instBeforeLowEnd->frames()), ch, 0};
+        c.hasAnalysisInst = true;
+    }
     c.out.channels = ch;
     c.progress = progress;
     c.progressUser = progressUser;
-    c.progressFrom = conform ? 0.10f : 0.0f;
+    c.progressFrom = lowTo >= 0.0f ? lowTo : (conform ? 0.10f : 0.0f);
     c.progressTo = 1.0f;
     setupGpu(settings, c, res);
 
     if (settings.outputKind == OutputKind::AlignedPair)
-        return extractAlignedPair(orig, *instPtr, settings, c, res, progress, progressUser);
-    if (settings.mergeMode == MergeMode::ByWaveform && settings.waveModel != WaveModel::V3)
-        return extractModel(orig, *instPtr, settings, c, res, progress, progressUser);
+        return extractAlignedPair(src, *instPtr, settings, c, res, progress, progressUser);
+    auto finish = [&](ExtractResult& r) {
+        if (cutSubsonic && r && r.vocal.frames() > 0) {
+            log::detail("  removed sub-bass rumble below 20 Hz");
+            lowend::subsonicCut(r.vocal.samples, r.vocal.channels, r.vocal.sampleRate);
+        }
+    };
+    if (settings.mergeMode == MergeMode::ByWaveform && settings.waveModel != WaveModel::V3) {
+        ExtractResult r = extractModel(src, *instPtr, settings, c, res, progress, progressUser);
+        finish(r);
+        return r;
+    }
+    if (settings.mergeMode == MergeMode::ByFrequency && settings.freqModel > 0) {
+        Settings asModel = settings;
+        asModel.waveModel = settings.freqModel == 1 ? WaveModel::Nmf : WaveModel::Spatial;
+        ExtractResult r = extractModel(src, *instPtr, asModel, c, res, progress, progressUser);
+        finish(r);
+        return r;
+    }
 
+    c.tapRaw = (settings.saveMask & kSaveRaw) != 0 && settings.outputKind == OutputKind::Vocal;
     const int rc = v3::processMain(c);
     if (c.cancelled) {
         res.cancelled = true;
         return res;
+    }
+    if (c.tapRaw) {
+        AudioBuffer raw;
+        raw.sampleRate = rate;
+        raw.channels = ch;
+        raw.samples.resize(src.samples.size(), 0.0f);
+        const std::size_t got = std::min(raw.samples.size(), c.rawTap.size());
+        for (std::size_t i = 0; i < got; ++i) raw.samples[i] = c.rawTap[i] / kScale;
+        c.rawTap = {};
+        res.extras.emplace_back("_raw", std::move(raw));
     }
     if (rc != 0) {
         res.error = rc == 1 ? "memory allocation failed" : "failed to write the output";
@@ -1129,7 +1319,151 @@ ExtractResult extract(const AudioBuffer& original,
     res.alignment.driftRange = c.usedRange;
     res.alignment.residual = c.analysed && c.org != 0.0 ? c.voc / c.org : 0.0;
 
-    finishOutput(c, orig, res);
+    finishOutput(c, src, res);
+    finish(res);
+    if (res.cancelled) return res;
+    if (progress) progress(1.0f, progressUser);
+    return res;
+}
+
+ExtractResult extractUpmix(const AudioBuffer& original, const AudioBuffer* instrumental, const Settings& settings, ProgressFn progress,
+                           void* progressUser, const AudioInfo* originalInfo, const AudioInfo* instrumentalInfo) {
+    ExtractResult res;
+    if (original.frames() == 0) {
+        res.error = "the original input is empty";
+        return res;
+    }
+    const upmix::Method m = static_cast<upmix::Method>(std::clamp(settings.upmixMethod, 0, upmix::kMethods - 1));
+    const char* name = upmix::methodName(m);
+    if (upmix::needsReference(m) && (!instrumental || instrumental->frames() == 0)) {
+        res.error = std::string("Upmix / ") + name + " needs the instrumental";
+        return res;
+    }
+    const bool seven = settings.upmixSevenOne && upmix::supportsSevenOne(m);
+    if (settings.upmixSevenOne && !seven) log::detail("  %s renders 5.1 only", name);
+    const AudioBuffer stereo = original.channels == 2 ? original : conformAudio(original, original.sampleRate, 2);
+    const int sr = stereo.sampleRate;
+    const std::vector<double> x(stereo.samples.begin(), stereo.samples.end());
+    log::Stage st(std::string("upmix (") + name + (seven ? ", 7.1)" : ", 5.1)"));
+    bool cancelled = false;
+    float from = 0.0f;
+    Stage phase{progress, progressUser, 0.0f, 1.0f, true};
+    auto report = [&](double f) {
+        phase.from = from;
+        if (!phase.report(static_cast<float>(f))) cancelled = true;
+        return !cancelled;
+    };
+    upmix::Multi out;
+    try {
+        if (m == upmix::Method::GuidedScene || m == upmix::Method::ContrastCov || m == upmix::Method::ModulationLock || m == upmix::Method::VocalAnchor) {
+            const bool anchor = m == upmix::Method::VocalAnchor;
+            const float alignEnd = anchor ? 0.25f : 0.3f;
+            const AudioBuffer inst = instrumental->sampleRate == sr && instrumental->channels == 2 ? *instrumental : conformAudio(*instrumental, sr, 2);
+            rc::Audio mix, ref;
+            mix.channels = ref.channels = 2;
+            mix.v = stereo.samples;
+            ref.v = inst.samples;
+            const std::size_t frames = stereo.frames();
+            rc::Audio aligned;
+            try {
+                hp::TimeMap map;
+                aligned = hp::alignDense(mix, ref, sr, map, hpProgress(progress, progressUser, 0.0f, alignEnd, cancelled), cancelled);
+                log::detail("  instrumental lined up with the dense time map");
+            } catch (const std::exception& e) {
+                log::detail("  dense time map unavailable (%s); using cross-correlation", e.what());
+                GccAligned g;
+                std::string err;
+                if (!gccAlign(mix, ref, sr, frames, g, err)) {
+                    res.error = err;
+                    return res;
+                }
+                aligned = std::move(g.warped);
+            }
+            if (cancelled) {
+                res.cancelled = true;
+                return res;
+            }
+            std::vector<double> r(aligned.v.begin(), aligned.v.end());
+            r.resize(x.size(), 0.0);
+            std::vector<double> vocal;
+            if (anchor) {
+                Settings vocalSettings = settings;
+                vocalSettings.outputKind = OutputKind::Vocal;
+                Stage sub{progress, progressUser, alignEnd, 0.65f, false};
+                const ExtractResult v = extract(original, *instrumental, vocalSettings, false, progress ? &stageTrampoline : nullptr, progress ? &sub : nullptr,
+                                                originalInfo, instrumentalInfo);
+                if (v.cancelled) {
+                    res.cancelled = true;
+                    return res;
+                }
+                if (!v) {
+                    res.error = v.error;
+                    return res;
+                }
+                const AudioBuffer voc = v.vocal.channels == 2 && v.vocal.sampleRate == sr ? v.vocal : conformAudio(v.vocal, sr, 2);
+                vocal.assign(x.size(), 0.0);
+                for (std::size_t i = 0; i < x.size() && i < voc.samples.size(); ++i) vocal[i] = voc.samples[i];
+                log::detail("  vocal from %s anchors the centre; its wide parts join the instrumental in the surrounds",
+                            settings.mergeMode == MergeMode::ByWaveform ? modelName(settings.waveModel) : "Frequency");
+            }
+            from = anchor ? 0.65f : 0.3f;
+            out = upmix::specField(x, sr, m, &r, settings.upmixLfe, report, cancelled, anchor ? &vocal : nullptr);
+        } else if (m == upmix::Method::ReferenceScene) {
+            Settings vocalSettings = settings;
+            vocalSettings.outputKind = OutputKind::Vocal;
+            Stage sub{progress, progressUser, 0.0f, 0.7f, false};
+            const ExtractResult v = extract(original, *instrumental, vocalSettings, false, progress ? &stageTrampoline : nullptr, progress ? &sub : nullptr,
+                                            originalInfo, instrumentalInfo);
+            if (v.cancelled) {
+                res.cancelled = true;
+                return res;
+            }
+            if (!v) {
+                res.error = v.error;
+                return res;
+            }
+            const AudioBuffer voc = v.vocal.channels == 2 ? v.vocal : conformAudio(v.vocal, sr, 2);
+            std::vector<double> novel(x.size(), 0.0), bed(x.size(), 0.0);
+            for (std::size_t i = 0; i < x.size(); ++i) {
+                novel[i] = i < voc.samples.size() ? voc.samples[i] : 0.0;
+                bed[i] = x[i] - novel[i];
+            }
+            log::detail("  vocal from %s, kept up front; the rest of the mix fills the field", settings.mergeMode == MergeMode::ByWaveform ? modelName(settings.waveModel) : "Frequency");
+            from = 0.7f;
+            out = upmix::referenceScene(bed, novel, sr, seven, settings.upmixLfe, report, cancelled);
+        } else if (m == upmix::Method::SceneVector) {
+            out = upmix::sceneVector(x, sr, seven, 290.0, 0.45, settings.upmixLfe, report, cancelled);
+        } else {
+            out = upmix::specField(x, sr, m, nullptr, settings.upmixLfe, report, cancelled);
+        }
+    } catch (const std::exception& e) {
+        log::clearStatus(3);
+        st.fail();
+        res.error = std::string("Upmix / ") + name + ": " + e.what();
+        return res;
+    }
+    log::clearStatus(3);
+    if (cancelled) {
+        res.cancelled = true;
+        return res;
+    }
+    res.vocal.sampleRate = sr;
+    res.vocal.channels = out.channels;
+    res.vocal.samples.resize(out.v.size());
+    for (std::size_t i = 0; i < out.v.size(); ++i) res.vocal.samples[i] = static_cast<float>(out.v[i]);
+    std::string levels;
+    const std::size_t frames = out.v.size() / static_cast<std::size_t>(std::max(1, out.channels));
+    for (int c = 0; c < out.channels; ++c) {
+        double e = 0;
+        for (std::size_t i = 0; i < frames; ++i) e += out.v[i * static_cast<std::size_t>(out.channels) + static_cast<std::size_t>(c)] * out.v[i * static_cast<std::size_t>(out.channels) + static_cast<std::size_t>(c)];
+        char b[48];
+        std::snprintf(b, sizeof b, "%s%s %.1f", c ? ", " : "", out.names[static_cast<std::size_t>(c)].c_str(), 10.0 * std::log10(e / std::max<std::size_t>(1, frames) + 1e-30));
+        levels += b;
+    }
+    log::detail("  channel levels (dBFS): %s", levels.c_str());
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "upmix:%s layout:%s lfe:%d", name, seven ? "7.1" : "5.1", settings.upmixLfe ? 1 : 0);
+    res.alignment.model = buf;
     if (progress) progress(1.0f, progressUser);
     return res;
 }

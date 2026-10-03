@@ -22,6 +22,7 @@ partial class MainForm
     private TextBox Edit2 = null!;
     private TextBox Edit3 = null!;
     private ThemedCheckBox OverwriteCheckBox = null!;
+    private ThemedCheckBox NormaliseCheckBox = null!;
     private BitBtn BitBtn1 = null!;
     private BitBtn BitBtn2 = null!;
     private BitBtn BitBtn3 = null!;
@@ -75,7 +76,9 @@ partial class MainForm
         Edit1 = new TextBox { Bounds = new Rectangle(24, 48, 337, 20), TabIndex = 0, AllowDrop = true };
         Edit2 = new TextBox { Bounds = new Rectangle(24, 120, 337, 20), TabIndex = 3, AllowDrop = true };
         Edit3 = new TextBox { Bounds = new Rectangle(24, 208, 337, 20), TabIndex = 6, AllowDrop = true };
-        OverwriteCheckBox = new ThemedCheckBox { Text = App.Messages.OverwriteFiles, Bounds = new Rectangle(24, 236, 337, 17), TabIndex = 8 };
+        OverwriteCheckBox = new ThemedCheckBox { Text = App.Messages.OverwriteFiles, Bounds = new Rectangle(24, 236, 180, 17), TabIndex = 8 };
+        NormaliseCheckBox = new ThemedCheckBox { Text = App.Messages.NormaliseOutput, Bounds = new Rectangle(212, 236, 149, 17), TabIndex = 9 };
+        Hints.SetToolTip(NormaliseCheckBox, App.Messages.NormaliseHint);
 
         BitBtn1  = MakeGlyphButton("folder",   376, 46,  1);
         PlayBtn1 = MakeGlyphButton("play",     416, 46,  2);
@@ -88,6 +91,7 @@ partial class MainForm
         // v4: Settings / Help / About は v3 の DFM では glyph を左端から固定 margin で置いていたが、
         // 拡大後の button では中身が左に寄って見えるので、glyph と caption をまとめて中央に置く (GlyphMargin 既定 -1)。
         StartBtn = new BitBtn { Bounds = new Rectangle(464, 16, 89, 57), Text = "Start", TabIndex = 9, Font = new Font("Tahoma", 9F) }.WithOwnFont();
+        StartBtn.SetGlyph("start");
 
         SetBitBtn = new BitBtn
         {
@@ -101,6 +105,7 @@ partial class MainForm
             Bounds = new Rectangle(464, 192, 89, 25), Text = "Help...", TabIndex = 11,
         };
         HelpBtn.SetKind(BitBtnKind.Help);
+        HelpBtn.SetGlyph("book");
 
         AboutBtn = new BitBtn { Bounds = new Rectangle(464, 232, 25, 25), TabIndex = 12 };
         AboutBtn.SetGlyph("info");
@@ -118,7 +123,7 @@ partial class MainForm
         Controls.AddRange(new Control[]
         {
             Label1, Label2, Label3, WformLbl1, WformLbl2, InfoLabel, ProgBar1,
-            Edit1, BitBtn1, PlayBtn1, Edit2, BitBtn2, PlayBtn2, Edit3, BitBtn3, OverwriteCheckBox,
+            Edit1, BitBtn1, PlayBtn1, Edit2, BitBtn2, PlayBtn2, Edit3, BitBtn3, OverwriteCheckBox, NormaliseCheckBox,
             StartBtn, SetBitBtn, HelpBtn, AboutBtn, CloseBtn, DbgPanel,
         });
 

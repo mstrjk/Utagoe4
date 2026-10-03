@@ -1,5 +1,5 @@
 # Utagoe
-Reimagination of Utagoe by TODAKEN.
+Reimagination of 歌声りっぷ (Utagoe) by TODAKEN.
 
 
 Utagoe pulls the vocal out of a song by subtracting the song's instrumental (off vocal / karaoke) version from the original mix.

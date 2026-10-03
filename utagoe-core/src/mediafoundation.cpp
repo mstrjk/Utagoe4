@@ -119,7 +119,14 @@ void describeSubtype(const GUID& sub, AudioInfo& info) {
             return;
         }
     }
-    info.codec = "Audio";
+    if (sub.Data1 == 0x616C6163UL || sub.Data1 == 0x63616C61UL) {
+        info.codec = "ALAC";
+        info.lossless = true;
+        return;
+    }
+    char tag[48];
+    std::snprintf(tag, sizeof tag, "Audio (format 0x%08lX)", static_cast<unsigned long>(sub.Data1));
+    info.codec = tag;
     info.lossless = false;
 }
 

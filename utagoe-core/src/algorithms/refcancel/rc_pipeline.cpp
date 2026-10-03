@@ -565,6 +565,9 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
 
     const int C = mix.channels;
     std::vector<double> acc(len * static_cast<std::size_t>(C), 0.0), norm(len, 0.0);
+    const bool keep = cfg.keepMembers && method == Method::Ensemble;
+    std::vector<std::string> memberNames;
+    std::vector<std::vector<double>> memberAcc;
     const std::size_t core = std::max<std::size_t>(static_cast<std::size_t>(cfg.nFft) * 4, static_cast<std::size_t>(cfg.blockSeconds * sr));
     const std::size_t context = std::max<std::size_t>(static_cast<std::size_t>(cfg.nFft), static_cast<std::size_t>(cfg.contextSeconds * sr));
     const std::size_t step = std::max<std::size_t>(1, static_cast<std::size_t>(core * 0.75));
@@ -604,6 +607,7 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
         };
 
         Spec bg;
+        std::vector<std::pair<const char*, Spec>> blockMembers;
         switch (method) {
         case Method::Robust: bg = baseline; break;
         case Method::Kalman: bg = kalman(); break;
@@ -620,23 +624,38 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
                 cands.push_back(&hm);
             }
             bg = consensusBackground(cands, baseline, cfg.ensembleStrength);
+            if (keep) {
+                blockMembers.emplace_back("Robust", baseline);
+                blockMembers.emplace_back("Kalman", k);
+                if (cal.nonlinearAccepted) blockMembers.emplace_back("Hammerstein", hm);
+            }
             break;
         }
         }
 
         // 背景を波形に戻し、原曲から引く。block の重なりは正の cosine 窓で重みづけして足す。
-        const Audio removed = istft(bg, cfg.nFft, cfg.hop, right - left);
         const std::size_t length = b - a;
-        for (std::size_t i = 0; i < length; ++i) {
-            double w = std::pow(std::sin(kPi * (static_cast<double>(i) + 0.5) / length), 2);
-            if (a == 0 && i < std::min(step / 2, length)) w = 1.0;
-            if (b == len && i + step / 2 >= length) w = 1.0;
-            norm[a + i] += w;
-            for (int c = 0; c < C; ++c) {
-                const float m = mix.at(a + i, c);
-                const float r = valid[a + i] ? m - removed.at(a + i - left, c) : m;
-                acc[(a + i) * static_cast<std::size_t>(C) + c] += static_cast<double>(r) * w;
+        auto add = [&](const Spec& spec, std::vector<double>& into, bool weights) {
+            const Audio removed = istft(spec, cfg.nFft, cfg.hop, right - left);
+            for (std::size_t i = 0; i < length; ++i) {
+                double w = std::pow(std::sin(kPi * (static_cast<double>(i) + 0.5) / length), 2);
+                if (a == 0 && i < std::min(step / 2, length)) w = 1.0;
+                if (b == len && i + step / 2 >= length) w = 1.0;
+                if (weights) norm[a + i] += w;
+                for (int c = 0; c < C; ++c) {
+                    const float m = mix.at(a + i, c);
+                    const float r = valid[a + i] ? m - removed.at(a + i - left, c) : m;
+                    into[(a + i) * static_cast<std::size_t>(C) + c] += static_cast<double>(r) * w;
+                }
             }
+        };
+        add(bg, acc, true);
+        for (std::size_t m = 0; m < blockMembers.size(); ++m) {
+            if (m >= memberAcc.size()) {
+                memberNames.emplace_back(blockMembers[m].first);
+                memberAcc.emplace_back(len * static_cast<std::size_t>(C), 0.0);
+            }
+            add(blockMembers[m].second, memberAcc[m], false);
         }
         // Python 版と同じく、開始位置は最後まで刻む (末尾の短い block も重ねて足す)。
         ++block;
@@ -649,6 +668,13 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
     for (std::size_t i = 0; i < len; ++i)
         for (int c = 0; c < C; ++c)
             res.estimate.at(i, c) = static_cast<float>(acc[i * static_cast<std::size_t>(C) + c] / std::max(norm[i], 1e-12));
+    for (std::size_t m = 0; m < memberAcc.size(); ++m) {
+        Audio member = res.estimate;
+        for (std::size_t i = 0; i < len; ++i)
+            for (int c = 0; c < C; ++c)
+                member.at(i, c) = static_cast<float>(memberAcc[m][i * static_cast<std::size_t>(C) + c] / std::max(norm[i], 1e-12));
+        res.members.emplace_back(memberNames[m], std::move(member));
+    }
     res.reference = reference;
     return res;
 }

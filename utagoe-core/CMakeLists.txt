@@ -156,12 +156,13 @@ set(CORE_SOURCES
     src/algorithms/hardpair/hp_dsp.cpp src/algorithms/hardpair/hp_grid.cpp src/algorithms/hardpair/hp_pipeline.cpp
     src/algorithms/hardpair/time_map.cpp src/algorithms/hardpair/rational.cpp src/algorithms/hardpair/surface.cpp
     src/algorithms/hardpair/ctf.cpp src/algorithms/hardpair/lowrank.cpp src/algorithms/hardpair/trend.cpp
-    src/algorithms/hardpair/kick_duck.cpp
     src/algorithms/centresides/cs.cpp src/algorithms/centresides/true_ms.cpp src/algorithms/centresides/phantom.cpp
     src/algorithms/centresides/coherence.cpp src/algorithms/centresides/adress.cpp src/algorithms/centresides/duet.cpp
     src/algorithms/centresides/pca.cpp src/algorithms/centresides/pretty.cpp
-    src/algorithms/findwithin/fw_dsp.cpp src/algorithms/findwithin/fw_workers.cpp src/algorithms/findwithin/fw_discovery.cpp
-    src/algorithms/findwithin/fw_align.cpp src/algorithms/findwithin/fw_verify.cpp src/algorithms/findwithin/fw_run.cpp)
+    src/algorithms/repeats/fw_dsp.cpp src/algorithms/repeats/fw_workers.cpp src/algorithms/repeats/fw_discovery.cpp
+    src/algorithms/repeats/fw_align.cpp src/algorithms/repeats/fw_verify.cpp src/algorithms/repeats/fw_run.cpp
+    src/algorithms/bandwidth/bw.cpp src/algorithms/lowend/lowend.cpp
+    src/algorithms/upmix/upmix_dsp.cpp src/algorithms/upmix/specfield.cpp src/algorithms/upmix/scene.cpp)
 
 add_library(utagoe_objs OBJECT ${CORE_SOURCES})
 target_include_directories(utagoe_objs PUBLIC include src)
@@ -187,13 +188,14 @@ add_executable(utagoe src/main.cpp)
 target_link_libraries(utagoe PRIVATE utagoe_objs)
 target_link_options(utagoe PRIVATE ${STATIC_RUNTIME})
 
-add_executable(utagoe_test tests/test.cpp)
+add_executable(utagoe_test tests/test.cpp src/capi.cpp)
+target_compile_definitions(utagoe_test PRIVATE UTAGOE_BUILD_DLL)
 target_link_libraries(utagoe_test PRIVATE utagoe_objs)
 target_link_options(utagoe_test PRIVATE ${STATIC_RUNTIME})
 
 # 未署名 exe を実行できない環境 (Smart App Control など) でもテストできるよう、DLL 版も作る。
-add_library(utagoe_tests SHARED tests/test.cpp)
-target_compile_definitions(utagoe_tests PRIVATE UTAGOE_TEST_DLL)
+add_library(utagoe_tests SHARED tests/test.cpp src/capi.cpp)
+target_compile_definitions(utagoe_tests PRIVATE UTAGOE_TEST_DLL UTAGOE_BUILD_DLL)
 target_link_libraries(utagoe_tests PRIVATE utagoe_objs)
 target_link_options(utagoe_tests PRIVATE ${STATIC_RUNTIME})
 set_target_properties(utagoe_tests PROPERTIES PREFIX "")
@@ -204,7 +206,7 @@ target_link_libraries(utagoe_bench PRIVATE utagoe_objs)
 target_link_options(utagoe_bench PRIVATE ${STATIC_RUNTIME})
 
 # By Waveform 代替モデルを Python 版の出力と照合する道具。配布物には含めない。
-foreach(parity rc hp cs fw)
+foreach(parity rc hp cs fw bw probe up)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${parity}_parity.cpp)
         add_executable(utagoe_${parity}_parity EXCLUDE_FROM_ALL tests/${parity}_parity.cpp)
         target_link_libraries(utagoe_${parity}_parity PRIVATE utagoe_objs)

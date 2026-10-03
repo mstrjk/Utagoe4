@@ -51,6 +51,7 @@ struct Config {
     int    covarianceFrames = 23;
     double covarianceLoading = 0.02;
     double ensembleStrength = 0.5;
+    bool   keepMembers = false;
     uint64_t seed = 0;
 };
 
@@ -155,6 +156,7 @@ Alignment estimateAlignment(const Audio& mix, const Audio& reference, int sr, co
 Audio warpReference(const Audio& reference, std::size_t length, const Alignment& a, int taps, std::vector<char>& valid);
 
 struct Result {
+    std::vector<std::pair<std::string, Audio>> members;
     Audio estimate;            // 原曲から背景を引いたもの
     Audio reference;           // 原曲の時間軸に合わせたインスト
     Alignment alignment;

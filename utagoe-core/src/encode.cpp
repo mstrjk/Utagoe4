@@ -62,10 +62,66 @@ int bitsOf(OutputDepth d) {
 }
 
 
+void put16le(std::vector<uint8_t>& v, uint32_t x) { v.push_back(uint8_t(x)); v.push_back(uint8_t(x >> 8)); }
+void put32le(std::vector<uint8_t>& v, uint32_t x) { put16le(v, x & 0xFFFF); put16le(v, x >> 16); }
+
+uint32_t speakerMask(int channels) {
+    switch (channels) {
+        case 6: return 0x3F;
+        case 8: return 0x63F;
+        default: return 0;
+    }
+}
+
+bool writeWaveExtensible(const std::string& path, const AudioBuffer& in, bool isFloat, int bits, std::string& error) {
+    const uint32_t bytesPer = static_cast<uint32_t>(bits / 8);
+    const uint32_t dataBytes = static_cast<uint32_t>(in.samples.size() * bytesPer);
+    std::vector<uint8_t> h;
+    h.insert(h.end(), {'R', 'I', 'F', 'F'});
+    put32le(h, 4 + 8 + 40 + 8 + dataBytes + (dataBytes & 1));
+    h.insert(h.end(), {'W', 'A', 'V', 'E', 'f', 'm', 't', ' '});
+    put32le(h, 40);
+    put16le(h, 0xFFFE);
+    put16le(h, static_cast<uint32_t>(in.channels));
+    put32le(h, static_cast<uint32_t>(in.sampleRate));
+    put32le(h, static_cast<uint32_t>(in.sampleRate) * bytesPer * static_cast<uint32_t>(in.channels));
+    put16le(h, bytesPer * static_cast<uint32_t>(in.channels));
+    put16le(h, static_cast<uint32_t>(bits));
+    put16le(h, 22);
+    put16le(h, static_cast<uint32_t>(bits));
+    put32le(h, speakerMask(in.channels));
+    put16le(h, isFloat ? 3 : 1);
+    h.insert(h.end(), {0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71});
+    h.insert(h.end(), {'d', 'a', 't', 'a'});
+    put32le(h, dataBytes);
+
+    std::vector<uint8_t> body;
+    if (isFloat) {
+        body.resize(dataBytes);
+        std::memcpy(body.data(), in.samples.data(), dataBytes);
+    } else {
+        const auto ints = toInts(in, bits);
+        body.resize(dataBytes);
+        for (std::size_t i = 0; i < ints.size(); ++i)
+            for (uint32_t b = 0; b < bytesPer; ++b)
+                body[i * bytesPer + b] = static_cast<uint8_t>(ints[i] >> (8 * b));
+    }
+    if (dataBytes & 1) body.push_back(0);
+
+    std::FILE* f = openFile(path, "wb");
+    if (!f) { error = cannotCreate(path); return false; }
+    const bool ok = std::fwrite(h.data(), 1, h.size(), f) == h.size() &&
+                    std::fwrite(body.data(), 1, body.size(), f) == body.size();
+    const bool closed = std::fclose(f) == 0;
+    if (!ok || !closed) { error = "write failed"; return false; }
+    return true;
+}
+
 bool writeWave(const std::string& path, const AudioBuffer& in, OutputDepth depth, std::string& error) {
     const bool isFloat = depth == OutputDepth::Float32;
     const int bits = bitsOf(depth);
     const uint64_t dataBytes = static_cast<uint64_t>(in.samples.size()) * (bits / 8);
+    if (in.channels > 2 && dataBytes <= 0xFFFFFF00ULL) return writeWaveExtensible(path, in, isFloat, bits, error);
 
     drwav_data_format fmt{};
     // 4 GB を超える場合は RF64 にする。
@@ -77,7 +133,7 @@ bool writeWave(const std::string& path, const AudioBuffer& in, OutputDepth depth
 
     drwav wav;
     if (!drwav_init_file_write_w(&wav, widenPath(path).c_str(), &fmt, nullptr)) {
-        error = "cannot create " + path;
+        error = cannotCreate(path);
         return false;
     }
     std::unique_ptr<drwav, decltype(&drwav_uninit)> guard(&wav, &drwav_uninit);
@@ -137,7 +193,7 @@ bool writeAiff(const std::string& path, const AudioBuffer& in, OutputDepth depth
             data[i * bytesPer + b] = static_cast<uint8_t>(ints[i] >> (8 * (bytesPer - 1 - b)));
 
     FileCloser f(openFile(path, "wb"));
-    if (!f.f) { error = "cannot create " + path; return false; }
+    if (!f.f) { error = cannotCreate(path); return false; }
     if (std::fwrite(h.data(), 1, h.size(), f.f) != h.size() ||
         std::fwrite(data.data(), 1, data.size(), f.f) != data.size()) {
         error = "write failed";
@@ -158,7 +214,7 @@ bool writeFlac(const std::string& path, const AudioBuffer& in, OutputDepth depth
     FLAC__stream_encoder_set_total_samples_estimate(enc.get(), in.frames());
 
     std::FILE* f = openFile(path, "wb");
-    if (!f) { error = "cannot create " + path; return false; }
+    if (!f) { error = cannotCreate(path); return false; }
     // init_FILE は FILE* の所有権を持つ。
     if (FLAC__stream_encoder_init_FILE(enc.get(), f, nullptr, nullptr) != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
         std::fclose(f);
@@ -183,7 +239,7 @@ bool writeFlac(const std::string& path, const AudioBuffer& in, OutputDepth depth
 
 bool writeVorbis(const std::string& path, const AudioBuffer& in, int kbps, std::string& error) {
     FileCloser f(openFile(path, "wb"));
-    if (!f.f) { error = "cannot create " + path; return false; }
+    if (!f.f) { error = cannotCreate(path); return false; }
 
     vorbis_info vi;
     vorbis_info_init(&vi);

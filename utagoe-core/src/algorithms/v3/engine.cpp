@@ -394,7 +394,9 @@ int introAnalysis(Context& c) {
 
     {
         Stage st(c, 0.72f, 1.0f);
+        if (c.hasAnalysisInst) std::swap(c.inst, c.analysisInst);
         scoreOffsets(c, ofs0, c.baseOfs, true, c.phase, 0, r);
+        if (c.hasAnalysisInst) std::swap(c.inst, c.analysisInst);
     }
     if (c.cancelled) return 0;
 
@@ -462,6 +464,7 @@ void passThrough(Context& c, Worker& w, Pipeline& pipe, int count, bool withInst
 int processMain(Context& c) {
     const Params& p = c.p;
 
+    if (c.hasAnalysisInst) std::swap(c.inst, c.analysisInst);
     int ia;
     bool ok = false;
     {
@@ -472,7 +475,10 @@ int processMain(Context& c) {
     }
     if (ia == 0) ok = true;
     else if (ia == 3) ia = 0;
-    if (c.cancelled || ia != 0) return ia;
+    if (c.cancelled || ia != 0) {
+        if (c.hasAnalysisInst) std::swap(c.inst, c.analysisInst);
+        return ia;
+    }
 
     // 処理の種類。oversampling は By Waveform のときだけ有効。
     int kind = p.procMode, ovs = 1;
@@ -533,6 +539,7 @@ int processMain(Context& c) {
     }
     default: offset = 0; break;
     }
+    if (c.hasAnalysisInst) std::swap(c.inst, c.analysisInst);
     if (c.cancelled) return 0;
 
     c.usedOffset = offset;

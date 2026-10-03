@@ -4,6 +4,7 @@
 #include "gpu.h"
 #include "log.h"
 #include "parallel.h"
+#include "algorithms/upmix/upmix.h"
 #include "fileio.h"
 
 #include <FLAC/format.h>
@@ -18,7 +19,9 @@
 #include "utagoe.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 
 using namespace utagoe;
@@ -73,15 +76,23 @@ void toCpp(const UtagoeSettings& c, Settings& s) {
     s.waveModel = (c.waveModel >= 0 && c.waveModel <= 13) ? static_cast<WaveModel>(c.waveModel) : WaveModel::V3;
     s.waveAlign = (c.waveAlign >= 0 && c.waveAlign <= 2) ? static_cast<WaveAlign>(c.waveAlign) : WaveAlign::V3Block;
     s.fitSpans.assign(c.fitSpans, strnlen(c.fitSpans, UTAGOE_SPANS_MAX));
-    s.outputKind = (c.outputKind >= 0 && c.outputKind <= 3) ? static_cast<OutputKind>(c.outputKind) : OutputKind::Vocal;
+    s.outputKind = (c.outputKind >= 0 && c.outputKind <= 4) ? static_cast<OutputKind>(c.outputKind) : OutputKind::Vocal;
     s.centerMethod = (c.centerMethod >= 0 && c.centerMethod <= 6) ? c.centerMethod : 1;
     s.outputFolder.assign(c.outputFolder, strnlen(c.outputFolder, UTAGOE_PATH_MAX));
     s.appIcon.assign(c.appIcon, strnlen(c.appIcon, UTAGOE_NAME_MAX));
     s.uiLanguage.assign(c.uiLanguage, strnlen(c.uiLanguage, UTAGOE_NAME_MAX));
-    s.kickDuck = c.kickDuck != 0;
     s.repeatGuide = (c.repeatGuide >= 0 && c.repeatGuide <= 2) ? c.repeatGuide : 0;
     s.repeatBreadth = (c.repeatBreadth >= 0 && c.repeatBreadth <= 1) ? c.repeatBreadth : 0;
     s.overwriteOutput = c.overwriteOutput != 0;
+    s.matchBandwidth = c.matchBandwidth != 0;
+    s.upmixMethod = (c.upmixMethod >= 0 && c.upmixMethod <= 9) ? c.upmixMethod : 3;
+    s.upmixSevenOne = c.upmixSevenOne != 0;
+    s.upmixLfe = c.upmixLfe != 0;
+    s.normalizeOutput = c.normalizeOutput != 0;
+    s.matchLowEnd = c.matchLowEnd != 0;
+    s.removeSubsonic = c.removeSubsonic != 0;
+    s.freqModel = (c.freqModel >= 0 && c.freqModel <= 2) ? c.freqModel : 0;
+    s.saveMask = (c.saveMask & (kSaveDefault | kSaveAligned | kSaveRaw | kSaveMembers)) ? c.saveMask & 15 : kSaveDefault;
 }
 
 void toC(const Settings& s, UtagoeSettings& c) {
@@ -128,11 +139,19 @@ void toC(const Settings& s, UtagoeSettings& c) {
     copyString(c.outputFolder, UTAGOE_PATH_MAX, s.outputFolder);
     copyString(c.appIcon, UTAGOE_NAME_MAX, s.appIcon);
     copyString(c.uiLanguage, UTAGOE_NAME_MAX, s.uiLanguage);
-    c.kickDuck = s.kickDuck ? 1 : 0;
     c.centerMethod = s.centerMethod;
     c.repeatGuide = s.repeatGuide;
     c.repeatBreadth = s.repeatBreadth;
     c.overwriteOutput = s.overwriteOutput ? 1 : 0;
+    c.matchBandwidth = s.matchBandwidth ? 1 : 0;
+    c.upmixMethod = s.upmixMethod;
+    c.upmixSevenOne = s.upmixSevenOne ? 1 : 0;
+    c.upmixLfe = s.upmixLfe ? 1 : 0;
+    c.normalizeOutput = s.normalizeOutput ? 1 : 0;
+    c.matchLowEnd = s.matchLowEnd ? 1 : 0;
+    c.removeSubsonic = s.removeSubsonic ? 1 : 0;
+    c.freqModel = s.freqModel;
+    c.saveMask = s.saveMask;
 }
 
 void setError(char* buf, int32_t len, const std::string& msg) {
@@ -142,10 +161,29 @@ void setError(char* buf, int32_t len, const std::string& msg) {
 struct ProgressBridge {
     UtagoeProgress fn;
     void* user;
+    float from = 0.0f, to = 1.0f;
 };
+
+bool beforeWrite(UtagoeProgress progress, void* user) {
+    return !progress || progress(-1.0f, user) != 0;
+}
+
+void normalise(const Settings& s, OutputFormat format, std::initializer_list<AudioBuffer*> outs, const char* what) {
+    if (!s.normalizeOutput) return;
+    float peak = 0.0f;
+    for (const AudioBuffer* b : outs)
+        for (float v : b->samples) peak = std::max(peak, std::abs(v));
+    const float ceiling = isLossless(format) ? 0.989f : 0.891f;
+    if (!(peak > ceiling) || !std::isfinite(peak)) return;
+    const float gain = ceiling / peak;
+    for (AudioBuffer* b : outs)
+        for (float& v : b->samples) v *= gain;
+    log::line("normalised %s: peak %+.2f dBFS, turned down %.2f dB", what, 20.0 * std::log10(peak), -20.0 * std::log10(gain));
+}
 
 bool progressTrampoline(float fraction, void* user) {
     auto* b = static_cast<ProgressBridge*>(user);
+    if (b && fraction >= 0.0f) fraction = b->from + (b->to - b->from) * fraction;
     return !b || !b->fn || b->fn(fraction, b->user) != 0;
 }
 
@@ -213,10 +251,23 @@ int32_t extractFileImpl(
     log::line("original     %s", originalPath);
     const bool split = s.outputKind == OutputKind::CenterSides;
     const bool repeats = s.outputKind == OutputKind::Repeats;
-    if (!split && !repeats) log::line("instrumental %s", instrumentalPath);
+    const bool upmixKind = s.outputKind == OutputKind::Upmix;
+    const bool upmixRef = upmixKind && upmix::needsReference(static_cast<upmix::Method>(std::clamp(s.upmixMethod, 0, upmix::kMethods - 1)));
+    if ((!split && !repeats && !upmixKind) || upmixRef) log::line("instrumental %s", instrumentalPath);
+    if (s.outputKind == OutputKind::Vocal) {
+        int m = s.saveMask & (kSaveDefault | kSaveAligned | kSaveRaw | kSaveMembers);
+        const bool members = s.mergeMode == MergeMode::ByWaveform &&
+                             (s.waveModel == WaveModel::Ensemble || s.waveModel == WaveModel::EnsembleLarge || s.waveModel == WaveModel::Auto);
+        if (!members) m &= ~kSaveMembers;
+        s.saveMask = m ? m : kSaveDefault;
+        if (s.saveMask == kSaveAligned) s.outputKind = OutputKind::AlignedPair;
+    }
     const bool pair = s.outputKind == OutputKind::AlignedPair;
     std::string mainOut, instOut;
-    if (pair || split || repeats) {
+    if (upmixKind) {
+        outputPaths(outputPath, s.outputKind, mainOut, instOut);
+        log::line("output       %s", mainOut.c_str());
+    } else if (pair || split || repeats) {
         outputPaths(outputPath, s.outputKind, mainOut, instOut);
         log::line("output       %s", mainOut.c_str());
         log::line("             %s", instOut.c_str());
@@ -249,6 +300,8 @@ int32_t extractFileImpl(
         ExtractResult r = extractCenterSides(orig, s, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr);
         if (r.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
         if (!r.error.empty()) { setError(errorBuf, errorLen, r.error); log::error(r.error, ""); return 5; }
+        if (!beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
+        normalise(s, format, {&r.vocal, &r.alignedInst}, "centre + sides");
         EncodeOptions enc;
         enc.format = format;
         enc.depth = depth;
@@ -277,11 +330,60 @@ int32_t extractFileImpl(
         return 0;
     }
 
+    if (upmixKind) {
+        AudioBuffer inst;
+        AudioInfo instInfo;
+        if (upmixRef) {
+            log::Stage st("decode instrumental");
+            if (!decodeAudio(instrumentalPath, inst, &instInfo, err)) {
+                st.fail();
+                setError(errorBuf, errorLen, "Instrumental: " + err);
+                log::error("cannot read the instrumental: " + err, "");
+                return 3;
+            }
+            log::detail("instrumental: %s", describe(instInfo, inst).c_str());
+        }
+        ProgressBridge bridge{progress, progressUser};
+        ExtractResult r = extractUpmix(orig, upmixRef ? &inst : nullptr, s, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr,
+                                       &origInfo, upmixRef ? &instInfo : nullptr);
+        if (r.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
+        if (!r.error.empty()) { setError(errorBuf, errorLen, r.error); log::error(r.error, ""); return 5; }
+        const OutputFormat format = formatFromExtension(mainOut, OutputFormat::Wav);
+        const OutputDepth depth = resolveDepth(s.outputDepth, format, origInfo, origInfo);
+        if (!beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
+        normalise(s, format, {&r.vocal}, "upmix");
+        EncodeOptions enc;
+        enc.format = format;
+        enc.depth = depth;
+        enc.bitrate = s.outputBitrate;
+        {
+            log::Stage st(std::string("encode ") + std::to_string(r.vocal.channels) + "-channel upmix " + extensionOf(format));
+            if (!encodeAudio(mainOut, r.vocal, enc, err)) {
+                st.fail();
+                setError(errorBuf, errorLen, "Output: " + err);
+                log::error("cannot write " + mainOut + ": " + err, "");
+                return 6;
+            }
+        }
+        if (result) {
+            std::memset(result, 0, sizeof *result);
+            copyString(result->debug, sizeof result->debug, r.alignment.debugString());
+            result->outputFormat   = static_cast<int32_t>(format);
+            result->outputDepth    = static_cast<int32_t>(depth);
+            result->outputRate     = r.vocal.sampleRate;
+            result->outputChannels = r.vocal.channels;
+            result->instrumentalRateIn     = r.vocal.sampleRate;
+            result->instrumentalChannelsIn = r.vocal.channels;
+        }
+        return 0;
+    }
+
     if (repeats) {
         const OutputFormat format = formatFromExtension(outputPath, s.outputFormat);
         const OutputDepth depth = resolveDepth(s.outputDepth, format, origInfo, origInfo);
         const std::string ext = extensionOf(format);
         const std::wstring wdir = longPath(widenUtf8(mainOut));
+        if (!beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
         if (!CreateDirectoryW(wdir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
             setError(errorBuf, errorLen, "Output: cannot create the folder " + mainOut);
             log::error("cannot create " + mainOut, "");
@@ -309,6 +411,7 @@ int32_t extractFileImpl(
         enc.bitrate = s.outputBitrate;
         std::string writeError;
         auto sink = [&](RepeatClip& c) {
+            normalise(s, format, {&c.shared, &c.difference}, c.name.c_str());
             const std::pair<const char*, const AudioBuffer*> outs[] = {{"_shared", &c.shared}, {"_difference", &c.difference}};
             for (const auto& [suffix, buf] : outs) {
                 const std::string path = mainOut + "\\" + c.name + suffix + ext;
@@ -383,32 +486,86 @@ int32_t extractFileImpl(
     auto is16 = [](const AudioInfo& i) { return i.lossless && !i.floatingPoint && i.bits > 0 && i.bits <= 16; };
     const bool quantize16 = depth == OutputDepth::Int16 && is16(origInfo) && is16(instInfo);
 
-    ProgressBridge bridge{progress, progressUser};
+    const bool wantMain = pair || (s.saveMask & kSaveDefault) != 0 || same;
+    const bool wantAligned = !pair && !same && (s.saveMask & kSaveAligned) != 0;
+    ProgressBridge bridge{progress, progressUser, 0.0f, wantAligned ? 0.8f : 1.0f};
     ExtractResult r = same
         ? extractFiltersOnly(orig, s, quantize16, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr)
-        : extract(orig, inst, s, quantize16, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr);
+        : extract(orig, inst, s, quantize16, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr, &origInfo, &instInfo);
 
     if (r.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
     if (!r.error.empty()) { setError(errorBuf, errorLen, r.error); log::error(r.error, ""); return 5; }
     log::detail("alignment:%s", r.alignment.debugString().c_str());
 
+    ExtractResult aligned;
+    if (wantAligned) {
+        Settings ps = s;
+        ps.outputKind = OutputKind::AlignedPair;
+        ProgressBridge pairBridge{progress, progressUser, 0.8f, 1.0f};
+        log::line("aligned pair");
+        aligned = extract(orig, inst, ps, quantize16, progress ? &progressTrampoline : nullptr, progress ? &pairBridge : nullptr, &origInfo, &instInfo);
+        if (aligned.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
+        if (!aligned.error.empty()) { setError(errorBuf, errorLen, aligned.error); log::error(aligned.error, ""); return 5; }
+    }
+
+    if (!beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
+    if ((s.saveMask & kSaveMembers) && !pair && !same && std::none_of(r.extras.begin(), r.extras.end(), [](const auto& e) { return e.first != "_raw"; }))
+        log::warn("no ensemble members to save: only Ensemble Small, Ensemble Large and Auto have them");
     EncodeOptions enc;
     enc.format = format;
     enc.depth = depth;
     enc.bitrate = s.outputBitrate;
-    // 揃えた組は原曲と、その時間軸に合わせたインストの 2 ファイル。声の出力は 1 ファイル。
-    struct Target { const std::string path; const AudioBuffer& audio; const char* what; };
-    const std::vector<Target> targets = pair
-        ? std::vector<Target>{{mainOut, r.vocal, "original"}, {instOut, r.alignedInst, "aligned instrumental"}}
-        : std::vector<Target>{{outputPath, r.vocal, "vocals"}};
+    struct Target { std::string path; AudioBuffer* audio; std::string what; };
+    std::vector<Target> targets;
+    if (pair) {
+        normalise(s, format, {&r.vocal, &r.alignedInst}, "aligned pair");
+        targets = {{mainOut, &r.vocal, "original"}, {instOut, &r.alignedInst, "aligned instrumental"}};
+    } else {
+        const std::size_t slash = std::string(outputPath).find_last_of("/\\");
+        const std::size_t dot = std::string(outputPath).find_last_of('.');
+        const bool hasExt = dot != std::string::npos && (slash == std::string::npos || dot > slash);
+        const std::string stem = hasExt ? std::string(outputPath).substr(0, dot) : std::string(outputPath);
+        const std::string ext = hasExt ? std::string(outputPath).substr(dot) : "";
+        const bool keepMain = wantMain || r.extras.empty();
+        std::vector<AudioBuffer*> vocals;
+        if (keepMain) {
+            targets.push_back({outputPath, &r.vocal, "vocals"});
+            vocals.push_back(&r.vocal);
+        }
+        for (auto& [suffix, audio] : r.extras) {
+            targets.push_back({stem + suffix + ext, &audio, suffix.substr(1)});
+            vocals.push_back(&audio);
+        }
+        if (s.normalizeOutput) {
+            float peak = 0.0f;
+            for (const AudioBuffer* b : vocals)
+                for (float v : b->samples) peak = std::max(peak, std::abs(v));
+            const float ceiling = isLossless(format) ? 0.989f : 0.891f;
+            if (peak > ceiling && std::isfinite(peak)) {
+                const float gain = ceiling / peak;
+                for (AudioBuffer* b : vocals)
+                    for (float& v : b->samples) v *= gain;
+                log::line("normalised vocals: peak %+.2f dBFS, turned down %.2f dB", 20.0 * std::log10(peak), -20.0 * std::log10(gain));
+            }
+        }
+        if (wantAligned) {
+            normalise(s, format, {&aligned.vocal, &aligned.alignedInst}, "aligned pair");
+            std::string pm, pi;
+            alignedPairPaths(outputPath, pm, pi);
+            targets.push_back({pm, &aligned.vocal, "original"});
+            targets.push_back({pi, &aligned.alignedInst, "aligned instrumental"});
+        }
+    }
+    std::string written;
     for (const Target& t : targets) {
-        log::Stage st(std::string("encode ") + t.what + " " + extensionOf(format));
-        if (!encodeAudio(t.path, t.audio, enc, err)) {
+        log::Stage st("encode " + t.what + " " + extensionOf(format));
+        if (!encodeAudio(t.path, *t.audio, enc, err)) {
             st.fail();
             setError(errorBuf, errorLen, "Output: " + err);
             log::error("cannot write " + t.path + ": " + err, "");
             return 6;
         }
+        written += t.path + "\n";
     }
 
     if (result) {
@@ -426,6 +583,7 @@ int32_t extractFileImpl(
         result->instrumentalChannelsIn = r.instrumentalChannelsIn;
         result->gpuUsed = r.gpuUsed ? 1 : 0;
         copyString(result->gpuAdapter, sizeof result->gpuAdapter, r.gpuAdapter);
+        copyString(result->written, sizeof result->written, written);
     }
     return 0;
 }
@@ -463,7 +621,7 @@ UTAGOE_API void UTAGOE_CALL utagoe_aligned_pair_paths(const char* outputPath, ch
 UTAGOE_API void UTAGOE_CALL utagoe_output_paths(const char* outputPath, int32_t kind, char* firstBuf, char* secondBuf, int32_t len) {
     if (!outputPath || len <= 0) return;
     std::string a, b;
-    outputPaths(outputPath, kind == 2 ? OutputKind::CenterSides : kind == 3 ? OutputKind::Repeats : OutputKind::AlignedPair, a, b);
+    outputPaths(outputPath, kind == 2 ? OutputKind::CenterSides : kind == 3 ? OutputKind::Repeats : kind == 4 ? OutputKind::Upmix : OutputKind::AlignedPair, a, b);
     if (firstBuf) copyString(firstBuf, static_cast<std::size_t>(len), a);
     if (secondBuf) copyString(secondBuf, static_cast<std::size_t>(len), b);
 }

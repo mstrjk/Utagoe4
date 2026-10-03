@@ -15,6 +15,8 @@ internal sealed partial class MainForm : Form
 
     private CancellationTokenSource? _cancel;
     private bool _closeWhenIdle;
+    private TaskCompletionSource? _stopNow;
+    private Task? _winding;
     private int _elapsed;
 
     private bool IsRunning => _cancel != null;
@@ -60,6 +62,18 @@ internal sealed partial class MainForm : Form
             _settings.Values = v;
             _settings.Save();
         };
+        NormaliseCheckBox.Checked = _settings.Values.NormalizeOutput != 0;
+        NormaliseCheckBox.CheckedChanged += (_, _) =>
+        {
+            int value = NormaliseCheckBox.Checked ? 1 : 0;
+            if (_settings.Values.NormalizeOutput == value) return;
+            var v = _settings.Values;
+            v.NormalizeOutput = value;
+            _settings.Values = v;
+            _settings.Save();
+        };
+        FitOutputChecks();
+        L.Changed += () => { Hints.SetToolTip(NormaliseCheckBox, Messages.NormaliseHint); FitOutputChecks(); };
 
         // DFM 上では Edit1 / Edit3 が同じ KeyPress handler、Edit2 は別 handler。
         Edit1.KeyPress += Edit1KeyPress;
@@ -122,8 +136,8 @@ internal sealed partial class MainForm : Form
     /// 原曲から出力 file の path を作る。名前は原曲の名前 (+ 自動命名の文字)、拡張子は出力形式のもの。
     private string OutputFileFor(string original, string folder)
     {
-        string suffix = _settings.Values.OutputKind == 1 ? Messages.PairSuffix
-                      : _settings.Values.OutputKind is 2 or 3 ? ""
+        string suffix = SaveFiles.Kind(_settings.Values) == 1 ? Messages.PairSuffix
+                      : _settings.Values.OutputKind is 2 or 3 or 4 ? ""
                       : _settings.Values.AutoNameOutput != 0 ? _settings.Values.OutputSuffix : "";
         string name = Path.GetFileName(FileNaming.AutoOutputName(original, suffix,
                                        Core.FormatExtension((OutputFormat)_settings.Values.OutputFormat)));
@@ -231,8 +245,16 @@ internal sealed partial class MainForm : Form
     {
         if (IsRunning)
         {
-            if (ConfirmHalt()) _cancel?.Cancel();
+            if (ConfirmHalt()) HaltNow();
             return;
+        }
+
+        if (_winding is { IsCompleted: false })
+        {
+            StartBtn.Enabled = false;
+            LogHub.Detail("waiting for the cancelled run to let go of its files");
+            await _winding;
+            StartBtn.Enabled = true;
         }
 
         string original = FileNaming.Clean(Edit1.Text);
@@ -244,7 +266,10 @@ internal sealed partial class MainForm : Form
 
         _cancel = new CancellationTokenSource();
         var token = _cancel.Token;
+        var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _stopNow = stop;
         var settings = _settings.Values;   // 処理開始時に settings を値コピーして snapshot 化する。
+        settings.OutputKind = SaveFiles.Kind(settings);
 
         SetRunning(true);
         LogHub.Busy = true;
@@ -259,19 +284,45 @@ internal sealed partial class MainForm : Form
 
         try
         {
-            rc = await Task.Run(() => Core.ExtractFile(
-                original, instrumental, output, settings,
-                fraction =>
-                {
-                    int pct = (int)(fraction * 100);
-                    if (pct != lastPercent)
+            var work = Task.Run(() =>
+            {
+                int code = Core.ExtractFile(
+                    original, instrumental, output, settings,
+                    fraction =>
                     {
-                        lastPercent = pct;
-                        BeginInvoke(() => ProgBar1.Value = Math.Clamp(pct, 0, 100));
-                    }
-                    return !token.IsCancellationRequested;
-                },
-                out result, out error));
+                        if (token.IsCancellationRequested || IsDisposed) return false;
+                        if (fraction < 0)
+                        {
+                            Invoke(() =>
+                            {
+                                foreach (string stopped in App.MciPlayer.ReleaseWhere(path => Targets(output, settings, path)))
+                                    LogHub.Detail($"stopped playing {Path.GetFileName(stopped)} so it can be rewritten");
+                            });
+                            return !token.IsCancellationRequested;
+                        }
+                        int pct = (int)(fraction * 100);
+                        if (pct != lastPercent)
+                        {
+                            lastPercent = pct;
+                            BeginInvoke(() =>
+                            {
+                                if (!token.IsCancellationRequested) ProgBar1.Value = Math.Clamp(pct, 0, 100);
+                            });
+                        }
+                        return !token.IsCancellationRequested;
+                    },
+                    out CoreResult r, out string err);
+                return (code, r, err);
+            });
+            if (await Task.WhenAny(work, stop.Task) == work)
+            {
+                (rc, result, error) = await work;
+            }
+            else
+            {
+                rc = 4;
+                _winding = work.ContinueWith(t => _ = t.Exception, TaskScheduler.Default);
+            }
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
         {
@@ -288,14 +339,14 @@ internal sealed partial class MainForm : Form
         }
         finally
         {
-            _cancel.Dispose();
+            _stopNow = null;
             _cancel = null;
             SetRunning(false);
             LogHub.Busy = false;
         }
         LogHub.Line(rc switch
         {
-            0 when settings.OutputKind == 3 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {Core.OutputPaths(output, 3).First} ({result.Debug})",
+            0 when settings.OutputKind is 3 or 4 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {Core.OutputPaths(output, settings.OutputKind).First} ({result.Debug})",
             0 when settings.OutputKind is 1 or 2 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {Core.OutputPaths(output, settings.OutputKind).First} + {Core.OutputPaths(output, settings.OutputKind).Second}",
             0 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {output}",
             4 => "cancelled",
@@ -305,6 +356,9 @@ internal sealed partial class MainForm : Form
         if (rc == 0)
         {
             ProgBar1.Value = 100;
+            string[] written = result.Written;
+            _lastOutputs = written.Length > 0 ? written.Where(File.Exists).ToList() : ProducedFiles(output, settings.OutputKind);
+            _results?.SetFiles(_lastOutputs);
             string note = ConversionNote(result);
             if (result.GpuUsed != 0) note = (note.Length > 0 ? note + "\n" : "") + Messages.GpuUsed(result.GpuAdapter);
             Hints.SetToolTip(InfoLabel, note);
@@ -346,7 +400,7 @@ internal sealed partial class MainForm : Form
     private bool ValidateInputs(string original, string instrumental, string folder, out string output)
     {
         output = "";
-        bool split = _settings.Values.OutputKind is 2 or 3;
+        bool split = !NeedsInstrumental(_settings.Values);
         if (split && (original.Length == 0 || folder.Length == 0))
             return Fail(Messages.NeedOriginal);
         if (!split && (original.Length == 0 || instrumental.Length == 0 || folder.Length == 0))
@@ -363,10 +417,11 @@ internal sealed partial class MainForm : Form
 
         static string Full(string p) { try { return Path.GetFullPath(p); } catch { return p; } }
         // 揃えた組は出力欄の名前から作る 2 ファイルを書くので、その 2 つを入力と比べる。
-        bool pair = _settings.Values.OutputKind == 1;
+        int runKind = SaveFiles.Kind(_settings.Values);
+        bool pair = runKind == 1;
         if (pair && string.Equals(Full(original), Full(instrumental), StringComparison.OrdinalIgnoreCase))
             return Fail(Messages.PairNeedsTwo);
-        var (pairMain, pairInst) = pair || split ? Core.OutputPaths(output, _settings.Values.OutputKind) : (output, output);
+        var (pairMain, pairInst) = runKind != 0 ? Core.OutputPaths(output, runKind) : (output, output);
         foreach (string written in new[] { pairMain, pairInst })
             if (string.Equals(Full(written), Full(original), StringComparison.OrdinalIgnoreCase) ||
                 (!split && string.Equals(Full(written), Full(instrumental), StringComparison.OrdinalIgnoreCase)))
@@ -388,10 +443,10 @@ internal sealed partial class MainForm : Form
 
         IEnumerable<string> Written(string path)
         {
-            int kind = _settings.Values.OutputKind;
-            if (kind == 0) return new[] { path };
+            int kind = SaveFiles.Kind(_settings.Values);
+            if (kind == 0) return new[] { path }.Concat(SaveFiles.Extras(path, _settings.Values));
             var (first, second) = Core.OutputPaths(path, kind);
-            return kind == 3 ? new[] { first } : new[] { first, second };
+            return kind is 3 or 4 ? new[] { first } : new[] { first, second };
         }
 
         static bool Taken(string path) => File.Exists(path) || Directory.Exists(path);
@@ -427,10 +482,64 @@ internal sealed partial class MainForm : Form
 
     private void ApplyOutputKind()
     {
-        bool needsInstrumental = _settings.Values.OutputKind is not (2 or 3);
+        bool needsInstrumental = NeedsInstrumental(_settings.Values);
         foreach (Control c in new Control[] { Label2, Edit2, BitBtn2 })
             c.Enabled = needsInstrumental && !IsRunning;
         UpdatePlayButtons();
+    }
+
+    private void FitOutputChecks()
+    {
+        OverwriteCheckBox.Width = OverwriteCheckBox.PreferredSize.Width;
+        NormaliseCheckBox.Left = OverwriteCheckBox.Right + LogicalToDeviceUnits(16);
+        NormaliseCheckBox.Width = Math.Max(NormaliseCheckBox.PreferredSize.Width, Edit3.Right - NormaliseCheckBox.Left);
+    }
+
+    private static bool NeedsInstrumental(in CoreSettings s) => s.OutputKind switch
+    {
+        2 or 3 => false,
+        4 => s.UpmixMethod is 4 or >= 6,
+        _ => true,
+    };
+
+    private static bool Targets(string output, in CoreSettings settings, string path)
+    {
+        static string Full(string p) { try { return Path.GetFullPath(p); } catch { return p; } }
+        string candidate = Full(path);
+        int kind = settings.OutputKind;
+        if (kind == 0)
+            return new[] { output }.Concat(SaveFiles.Extras(output, settings))
+                .Any(f => string.Equals(candidate, Full(f), StringComparison.OrdinalIgnoreCase));
+        var (first, second) = Core.OutputPaths(output, kind);
+        if (kind == 3)
+            return candidate.StartsWith(Full(first).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(candidate, Full(first), StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(candidate, Full(second), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static List<string> ProducedFiles(string output, int kind)
+    {
+        var files = new List<string>();
+        if (kind == 0) files.Add(output);
+        else if (kind == 4) files.Add(Core.OutputPaths(output, kind).First);
+        else if (kind is 1 or 2)
+        {
+            var (first, second) = Core.OutputPaths(output, kind);
+            files.Add(first);
+            files.Add(second);
+        }
+        else
+        {
+            string folder = Core.OutputPaths(output, kind).First;
+            try
+            {
+                files.AddRange(Directory.EnumerateFiles(folder)
+                    .Where(f => !f.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        return files.Where(File.Exists).ToList();
     }
 
     private void UpdatePlayButtons()
@@ -441,7 +550,7 @@ internal sealed partial class MainForm : Form
             try { return path.Length > 0 && File.Exists(path); }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException) { return false; }
         }
-        bool needsInstrumental = _settings.Values.OutputKind is not (2 or 3);
+        bool needsInstrumental = NeedsInstrumental(_settings.Values);
         PlayBtn1.Enabled = !IsRunning && Playable(Edit1.Text);
         PlayBtn2.Enabled = !IsRunning && needsInstrumental && Playable(Edit2.Text);
     }
@@ -451,7 +560,7 @@ internal sealed partial class MainForm : Form
         StartBtn.Text = running ? Messages.Running : Messages.Start;
 
         foreach (Control c in new Control[]
-                 { Edit1, Edit2, Edit3, BitBtn1, BitBtn2, BitBtn3, OverwriteCheckBox,
+                 { Edit1, Edit2, Edit3, BitBtn1, BitBtn2, BitBtn3, OverwriteCheckBox, NormaliseCheckBox,
                    PlayBtn1, PlayBtn2, SetBitBtn })
             c.Enabled = !running;
         if (!running) ApplyOutputKind();
@@ -493,11 +602,23 @@ internal sealed partial class MainForm : Form
             if (ConfirmHalt())
             {
                 _closeWhenIdle = true;
-                _cancel?.Cancel();
+                HaltNow();
             }
             return;
         }
         base.OnFormClosing(e);
+    }
+
+    private void HaltNow()
+    {
+        _cancel?.Cancel();
+        _stopNow?.TrySetResult();
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        base.OnFormClosed(e);
+        if (_winding is { IsCompleted: false }) Environment.Exit(0);
     }
 
     // v4: Settings は modal にしない (MainForm.Panels.cs)。

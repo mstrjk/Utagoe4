@@ -18,6 +18,8 @@ internal sealed class VclRadioGroup : VclGroupBox
 
     public event EventHandler? ItemIndexChanged;
 
+    public IReadOnlyList<RadioButton> Buttons => _buttons;
+
     internal sealed class ScrollHost : Panel
     {
         public ScrollHost()

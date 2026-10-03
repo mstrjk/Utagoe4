@@ -112,13 +112,6 @@ std::vector<std::pair<Method, Audio>> render(const Audio& mix, const Audio& base
 
 const char* methodName(Method m);
 
-struct KickDuck {
-    std::vector<float> gainDb;
-    int kicks = 0;
-    double depthDb = 0, onsetMs = 0, attackMs = 0, releaseMs = 0, strength = 0, changeDb = 0;
-};
-KickDuck kickDuck(const Audio& mix, const Audio& reference, double sr, double maxDepthDb = 3.0);
-void applyGainDb(Audio& a, const std::vector<float>& gainDb);
 
 }
 }

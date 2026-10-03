@@ -70,8 +70,6 @@ internal unsafe struct CoreSettings
     public const int NameMax = 32;
     public fixed byte AppIconBytes[NameMax];
 
-    public int KickDuck;
-
     public int CenterMethod;
 
     public fixed byte LanguageBytes[NameMax];
@@ -80,6 +78,19 @@ internal unsafe struct CoreSettings
     public int RepeatBreadth;
 
     public int OverwriteOutput;
+
+    public int MatchBandwidth;
+
+    public int UpmixMethod;
+    public int UpmixSevenOne;
+    public int UpmixLfe;
+
+    public int NormalizeOutput;
+
+    public int MatchLowEnd;
+    public int RemoveSubsonic;
+    public int FreqModel;
+    public int SaveMask;
 
     public string Language
     {
@@ -213,6 +224,20 @@ internal unsafe struct CoreResult
     public int InstrumentalChannelsIn;
     public int GpuUsed;
     public fixed byte GpuAdapterBytes[128];
+    public fixed byte WrittenBytes[4096];
+
+    public string[] Written
+    {
+        get
+        {
+            fixed (byte* p = WrittenBytes)
+            {
+                int n = 0;
+                while (n < 4096 && p[n] != 0) n++;
+                return Encoding.UTF8.GetString(p, n).Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            }
+        }
+    }
 
     public string GpuAdapter
     {

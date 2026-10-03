@@ -12,7 +12,7 @@ namespace Utagoe.App;
 internal static class AppIcons
 {
     public const string Default = "standard";
-    public static readonly string[] Names = { "standard", "army", "ice", "silver", "teal", "white", "wine" };
+    public static readonly string[] Names = { "standard", "army", "ice", "silver", "wine" };
 
     private static readonly int[] IconSizes = { 16, 20, 24, 32, 40, 48, 64, 96, 128, 256 };
     private static readonly Dictionary<string, Bitmap> Sources = new();

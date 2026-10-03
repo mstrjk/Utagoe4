@@ -27,11 +27,14 @@ internal sealed partial class MainForm
     private const float MaxZoom = 1.5f;
 
     private BitBtn? _resetBtn;
+    private ResultsPanel? _results;
+    private List<string> _lastOutputs = new();
 
     private void InitPanels()
     {
         // 最大化中だけ出す Reset (Help... の位置)。Settings と terminal は画面に出ているので、その 2 つの button は隠す。
         _resetBtn = new BitBtn { Bounds = HelpBtn.Bounds, Text = Messages.Reset, Visible = false, TabIndex = HelpBtn.TabIndex };
+        _resetBtn.SetGlyph("reset");
         _resetBtn.Click += (_, _) => _settingsForm?.ResetToDefaults();
         Controls.Add(_resetBtn);
         _mainArea = ClientSize;
@@ -125,6 +128,9 @@ internal sealed partial class MainForm
         DockSettings();
         DockTerminal();
         DockInfo();
+        _results = new ResultsPanel();
+        _results.SetFiles(_lastOutputs);
+        Controls.Add(_results);
         SetBitBtn.Visible = HelpBtn.Visible = false;
         if (_resetBtn != null) _resetBtn.Visible = true;
         ResumeLayout(true);
@@ -197,6 +203,12 @@ internal sealed partial class MainForm
         _docked = false;
         SuspendLayout();
         RemoveInfo();
+        if (_results != null)
+        {
+            Controls.Remove(_results);
+            _results.Dispose();
+            _results = null;
+        }
         _mainFrameBounds = Rectangle.Empty;
         SetBitBtn.Visible = HelpBtn.Visible = true;
         if (_resetBtn != null) _resetBtn.Visible = false;
@@ -266,13 +278,20 @@ internal sealed partial class MainForm
             _settingsZoom!.Apply(k, resizeRoot: true);
             setSize = _settingsForm!.Size;
         }
-        int inner = Math.Max(mainH, setSize.Height);
+        int resultsMin = _results != null ? (int)Math.Round(LogicalToDeviceUnits(96) * k) : 0;
+        int inner = Math.Max(mainH + (resultsMin > 0 ? resultsMin + gap : 0), setSize.Height);
         int rowH = headerK + inner + gap;
 
-        // 元の main window の中身: 枠の中で縦の中央に置く。
         _mainFrameBounds = new Rectangle(gap, gap, mainW + gap * 2, rowH);
-        var offset = new Point(_mainFrameBounds.X + gap, _mainFrameBounds.Y + headerK + (inner - mainH) / 2);
+        var offset = new Point(_mainFrameBounds.X + gap, _mainFrameBounds.Y + headerK + (_results != null ? 0 : (inner - mainH) / 2));
         _mainZoom.Apply(k, resizeRoot: false, offset);
+        if (_results != null)
+        {
+            int pad = (int)Math.Round(LogicalToDeviceUnits(Gap) * k);
+            int resultsTop = offset.Y + mainH + gap;
+            _results.Font = Font;
+            _results.Bounds = new Rectangle(offset.X + pad, resultsTop, Math.Max(0, mainW - pad * 2), Math.Max(0, _mainFrameBounds.Bottom - gap - resultsTop));
+        }
         int right = _mainFrameBounds.Right;
 
         if (hasSettings)

@@ -45,13 +45,26 @@ internal sealed partial class SettingsForm : Form
         OutFormatCombo.SelectedIndexChanged += (_, _) => UpdateOutputControls();
         GpuCheckBox.CheckedChanged += (_, _) => GpuExactButton.Enabled = GpuFastButton.Enabled = GpuCheckBox.Checked;
         // 親の選択が変わったら、使われなくなる子の設定を灰色にする。
-        foreach (var g in new[] { MethodRadioGroup, LevelRadioGroup, ModelRadioGroup, AlignRadioGroup, CentreRadioGroup })
+        foreach (var g in new[] { MethodRadioGroup, LevelRadioGroup, ModelRadioGroup, AlignRadioGroup, CentreRadioGroup, UpmixRadioGroup, FreqModelRadioGroup })
             g.ItemIndexChanged += (_, _) => UpdateEnabled();
         foreach (var c in new[] { OvspCheckBox, CfocusCheckBox, LPFCheckBox, HPFCheckBox, VnameCheckBox })
             c.CheckedChanged += (_, _) => UpdateEnabled();
         AdptManualButton.CheckedChanged += (_, _) => UpdateEnabled();
-        OutKindCombo.SelectedIndexChanged += (_, _) => UpdateEnabled();
+        SaveDropDown.CheckedChanged += (_, _) => UpdateEnabled();
+        UpmixVocalCombo.SelectedIndexChanged += (_, _) => UpdateEnabled();
+        for (int k = 0; k < UseMethodButtons.Length; ++k)
+        {
+            int m = k;
+            UseMethodButtons[k].CheckedChanged += (_, _) =>
+            {
+                if (UseMethodButtons[m].Checked && MethodRadioGroup.ItemIndex != m) MethodRadioGroup.ItemIndex = m;
+            };
+        }
+        MethodRadioGroup.ItemIndexChanged += (_, _) => SyncMethodButtons();
+        PageControl.SelectedIndexChanged += (_, _) => PlaceShared();
         Populate(current());
+        if (UseMethodButtons[Math.Max(0, MethodRadioGroup.ItemIndex)].Parent?.Parent is TabPage active) PageControl.SelectedTab = active;
+        PlaceShared();
         _liveApply.Tick += (_, _) => ApplyNow();
         HookLiveApply(this);
         AttachTips();
@@ -141,7 +154,8 @@ internal sealed partial class SettingsForm : Form
         if (!Core.CheckSpans(SpansEdit.Text.Trim(), out string error))
         {
             Utagoe.Forms.MessageForm.Show(this, Messages.BadSpans(error), Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            PageControl.SelectedIndex = 3;
+            PageControl.SelectedTab = WaveTab;
+            WavePages.SelectedTab = WaveMainPage;
             SpansEdit.Focus();
             return;
         }
@@ -167,7 +181,7 @@ internal sealed partial class SettingsForm : Form
     private void PopulateCore(CoreSettings s)
     {
         IntroRadioGroup.ItemIndex = s.IntroMode;
-        MethodRadioGroup.ItemIndex = s.OutputKind is 2 or 3 ? s.OutputKind : s.MergeMode == 1 ? 1 : 0;
+        MethodRadioGroup.ItemIndex = s.OutputKind is 2 or 3 or 4 ? s.OutputKind : s.MergeMode == 1 ? 1 : 0;
         SoundQtyGroup.ItemIndex   = s.SoundQty;
         LevelRadioGroup.ItemIndex = s.LevelAdpt;
         DataRadioGroup.ItemIndex  = s.ProcMode;
@@ -195,10 +209,14 @@ internal sealed partial class SettingsForm : Form
         VnameCheckBox.Checked = s.AutoNameOutput != 0;
         VnameEdit.Text = s.OutputSuffix;
 
-        OutKindCombo.SelectedIndex = s.OutputKind == 1 ? 1 : 0;
+        SaveDropDown.Mask = s.OutputKind == 1 ? SaveFiles.Aligned : (s.SaveMask & 15) == 0 ? SaveFiles.Default : s.SaveMask & 15;
         RepeatGuideCombo.SelectedIndex = Math.Clamp(s.RepeatGuide, 0, RepeatGuideCombo.Items.Count - 1);
         RepeatSearchCombo.SelectedIndex = Math.Clamp(s.RepeatBreadth, 0, RepeatSearchCombo.Items.Count - 1);
         CentreRadioGroup.ItemIndex = Math.Clamp(s.CenterMethod, 0, Messages.CentreNames.Length - 1);
+        UpmixRadioGroup.ItemIndex = Math.Clamp(s.UpmixMethod, 0, Messages.UpmixNames.Length - 1);
+        UpmixLayoutCombo.SelectedIndex = s.UpmixSevenOne != 0 ? 1 : 0;
+        UpmixLfeCheckBox.Checked = s.UpmixLfe != 0;
+        UpmixVocalCombo.SelectedIndex = s.MergeMode == 1 ? 1 : 0;
         OutFormatCombo.SelectedIndex = Math.Clamp(s.OutputFormat, 0, OutFormatCombo.Items.Count - 1);
         OutDepthCombo.SelectedIndex = Math.Clamp(s.OutputDepth, 0, OutDepthCombo.Items.Count - 1);
         OutBitrateCombo.SelectedIndex = NearestBitrate(s.OutputBitrate);
@@ -213,8 +231,12 @@ internal sealed partial class SettingsForm : Form
         ModelRadioGroup.ItemIndex = modelIndex >= 0 ? modelIndex : 1;
         AlignRadioGroup.ItemIndex = Math.Clamp(s.WaveAlign, 0, Messages.AlignNames.Length - 1);
         SpansEdit.Text = s.FitSpans;
-        KickDuckCheckBox.Checked = s.KickDuck != 0;
+        MatchBandwidthCheckBox.Checked = s.MatchBandwidth != 0;
+        MatchLowEndCheckBox.Checked = s.MatchLowEnd != 0;
+        FreqModelRadioGroup.ItemIndex = Math.Clamp(s.FreqModel, 0, Messages.FreqModelNames.Length - 1);
+        SubsonicCheckBox.Checked = s.RemoveSubsonic != 0;
         UpdateEnabled();
+        SyncMethodButtons();
 
         // 値が変わらず event が出ない場合もあるので label は明示的に更新する。Reset が既定値のままでも正しく表示するため。
         KvolText.Text   = TrackLabels.ExtractLevel(KvolTrackBar.Value);
@@ -259,8 +281,13 @@ internal sealed partial class SettingsForm : Form
 
         int method = Math.Max(0, MethodRadioGroup.ItemIndex);
         if (method <= 1) s.MergeMode = method;
-        s.OutputKind = method >= 2 ? method : Math.Max(0, OutKindCombo.SelectedIndex);
+        else if (method == 4 && UpmixRadioGroup.ItemIndex is 6 or 9) s.MergeMode = Math.Max(0, UpmixVocalCombo.SelectedIndex);
+        s.OutputKind = method >= 2 ? method : 0;
+        s.SaveMask = SaveDropDown.Mask == 0 ? SaveFiles.Default : SaveDropDown.Mask;
         s.CenterMethod = Math.Max(0, CentreRadioGroup.ItemIndex);
+        s.UpmixMethod = Math.Max(0, UpmixRadioGroup.ItemIndex);
+        s.UpmixSevenOne = UpmixLayoutCombo.SelectedIndex == 1 ? 1 : 0;
+        s.UpmixLfe = UpmixLfeCheckBox.Checked ? 1 : 0;
         s.RepeatGuide = Math.Max(0, RepeatGuideCombo.SelectedIndex);
         s.RepeatBreadth = Math.Max(0, RepeatSearchCombo.SelectedIndex);
         s.OutputFormat = Math.Max(0, OutFormatCombo.SelectedIndex);
@@ -273,7 +300,10 @@ internal sealed partial class SettingsForm : Form
         s.WaveModel = ModelValue;
         s.WaveAlign = Math.Max(0, AlignRadioGroup.ItemIndex);
         s.FitSpans = SpansEdit.Text.Trim();
-        s.KickDuck = KickDuckCheckBox.Checked ? 1 : 0;
+        s.MatchBandwidth = MatchBandwidthCheckBox.Checked ? 1 : 0;
+        s.MatchLowEnd = MatchLowEndCheckBox.Checked ? 1 : 0;
+        s.FreqModel = Math.Max(0, FreqModelRadioGroup.ItemIndex);
+        s.RemoveSubsonic = SubsonicCheckBox.Checked ? 1 : 0;
         return s;
     }
 
@@ -305,22 +335,34 @@ internal sealed partial class SettingsForm : Form
         int method = MethodRadioGroup.ItemIndex;
         bool split = method == 2;
         bool repeats = method == 3;
-        bool originalOnly = split || repeats;
-        bool pair = !originalOnly && OutKindCombo.SelectedIndex == 1;
+        bool upmix = method == 4;
+        int upmixMethod = UpmixRadioGroup.ItemIndex;
+        bool referenceScene = upmix && upmixMethod is 6 or 9;
+        bool originalOnly = split || repeats || (upmix && !referenceScene);
+        bool vocalRun = !originalOnly && !upmix;
+        SaveDropDown.SetAvailable(1, vocalRun);
+        SaveDropDown.SetAvailable(2, vocalRun);
+        SaveDropDown.SetAvailable(3, vocalRun && SaveFiles.MembersAvailable(method, ModelValue));
+        bool pair = vocalRun && SaveDropDown.EffectiveMask == SaveFiles.Aligned;
         bool noExtract = pair || originalOnly;
-        bool wave = method == 1;
+        bool wave = method == 1 || (referenceScene && UpmixVocalCombo.SelectedIndex == 1);
         bool model = ModelValue > 0;
         bool autoPick = !noExtract && wave && ModelValue == AutoValue;
         bool gcc = !autoPick && AlignRadioGroup.ItemIndex >= 1;
         bool algorithm = ModelValue >= FirstSideAlgorithm && ModelValue <= LastSideAlgorithm;
-        bool aligns = pair || (!noExtract && wave && model && !autoPick);
-        bool v3Analysis = !originalOnly && !(aligns && gcc);
-
-        OutKindCombo.Enabled = !originalOnly;
-        MethodNeedsLabel.Text = originalOnly ? Messages.NeedsOriginal : Messages.NeedsBoth;
         bool freq = !noExtract && !wave;
-        SoundQtyGroup.Enabled = freq;
-        foreach (Control c in new Control[] { KvolTrackBar, KvolText, KvolWeak, KvolStrong }) c.Enabled = freq;
+        int freqAlgo = Math.Max(0, FreqModelRadioGroup.ItemIndex);
+        bool v3Freq = freq && freqAlgo == 0;
+        bool modelAligns = pair || (!noExtract && wave && model && !autoPick) || (freq && freqAlgo > 0);
+        bool aligns = modelAligns || freq;
+        bool v3Analysis = !originalOnly && !(modelAligns && gcc);
+
+        NeedsLabels[0].Text = NeedsLabels[1].Text = Messages.NeedsBoth;
+        NeedsLabels[2].Text = NeedsLabels[3].Text = Messages.NeedsOriginal;
+        NeedsLabels[4].Text = upmixMethod is 4 or >= 6 ? Messages.NeedsBoth : Messages.NeedsOriginal;
+        FreqModelRadioGroup.Enabled = freq;
+        SoundQtyGroup.Enabled = KvolBox.Enabled = v3Freq;
+        foreach (Control c in new Control[] { KvolTrackBar, KvolText, KvolWeak, KvolStrong }) c.Enabled = v3Freq;
 
         bool v3Sub = !noExtract && wave && !model;
         LevelRadioGroup.Enabled = v3Sub;
@@ -344,9 +386,13 @@ internal sealed partial class SettingsForm : Form
         ModelRadioGroup.Enabled = !noExtract && wave;
         AlignRadioGroup.Enabled = aligns;
         SpansBox.Enabled = !noExtract && wave && model && !algorithm;
-        KickDuckCheckBox.Enabled = !noExtract && wave && model;
+        MatchBandwidthCheckBox.Enabled = !noExtract;
+        MatchLowEndCheckBox.Enabled = SubsonicCheckBox.Enabled = !noExtract;
         CentreRadioGroup.Enabled = split;
-        FindWithinBox.Enabled = repeats;
+        RepeatsBox.Enabled = repeats;
+        UpmixRadioGroup.Enabled = UpmixLfeCheckBox.Enabled = upmix;
+        UpmixLayoutCombo.Enabled = UpmixLayoutLabel.Enabled = upmix && upmixMethod is 5 or 6;
+        UpmixVocalCombo.Enabled = UpmixVocalLabel.Enabled = referenceScene;
 
         // 揃えた組の自動命名は _aligned を使うので、声の suffix は使わない。
         VnameEdit.Enabled = AppendLabel.Enabled = VnameCheckBox.Checked && !noExtract;
@@ -357,13 +403,18 @@ internal sealed partial class SettingsForm : Form
     {
         bool Split() => MethodRadioGroup.ItemIndex == 2;
         bool Repeats() => MethodRadioGroup.ItemIndex == 3;
-        bool Pair() => Split() || Repeats() || OutKindCombo.SelectedIndex == 1;
-        bool OriginalOnly() => Split() || Repeats();
-        string NoX() => Split() ? Messages.Tips.BecauseSplit : Repeats() ? Messages.Tips.BecauseRepeats : Messages.Tips.BecausePair;
-        bool Wave() => MethodRadioGroup.ItemIndex == 1;
+        bool Upmix() => MethodRadioGroup.ItemIndex == 4;
+        bool ReferenceScene() => Upmix() && UpmixRadioGroup.ItemIndex is 6 or 9;
+        bool OriginalOnly() => Split() || Repeats() || (Upmix() && !ReferenceScene());
+        bool Pair() => OriginalOnly() || (!Upmix() && SaveDropDown.EffectiveMask == SaveFiles.Aligned);
+        string NoX() => Split() ? Messages.Tips.BecauseSplit : Repeats() ? Messages.Tips.BecauseRepeats :
+                        Upmix() ? Messages.Tips.BecauseUpmix : Messages.Tips.BecausePair;
+        bool Wave() => MethodRadioGroup.ItemIndex == 1 || (ReferenceScene() && UpmixVocalCombo.SelectedIndex == 1);
         bool Model() => ModelValue > 0;
         bool Auto() => !Pair() && Wave() && ModelValue == AutoValue;
-        bool Gcc() => ((Pair() && !OriginalOnly()) || (!Pair() && Wave() && Model() && !Auto())) && AlignRadioGroup.ItemIndex >= 1;
+        int FreqAlgo() => Math.Max(0, FreqModelRadioGroup.ItemIndex);
+        bool Gcc() => ((Pair() && !OriginalOnly()) || (!Pair() && Wave() && Model() && !Auto()) || (!Pair() && !Wave() && FreqAlgo() > 0)) &&
+                      AlignRadioGroup.ItemIndex >= 1;
         bool SideAlgorithm() => ModelValue >= FirstSideAlgorithm && ModelValue <= LastSideAlgorithm;
         string ModelName() => Messages.ModelShortNames[Math.Clamp(ModelValue, 0, Messages.ModelShortNames.Length - 1)];
 
@@ -371,13 +422,14 @@ internal sealed partial class SettingsForm : Form
             _links.Add(target, () => why() is { } reason ? text() + Messages.Tips.NotNow + reason : text());
 
         string? V3Analysis() => OriginalOnly() ? NoX() : Gcc() ? Messages.Tips.BecauseGcc : null;
-        string? FreqOnly() => Pair() ? NoX() : Wave() ? Messages.Tips.BecauseFreqOnly : null;
+        string? FreqOnly() => Pair() ? NoX() : Wave() ? Messages.Tips.BecauseFreqOnly : FreqAlgo() > 0 ? Messages.Tips.BecauseV3FreqOnly : null;
 
         Tip(IntroRadioGroup, () => Messages.Tips.Intro, V3Analysis);
         Tip(AdptLvlGroupBox, () => Messages.Tips.TimeShift, V3Analysis);
-        Tip(MethodRadioGroup, () => Messages.Tips.Method, () => null);
+        foreach (var use in UseMethodButtons) Tip(use, () => Messages.Tips.Method, () => null);
         Tip(SoundQtyGroup, () => Messages.Tips.Accuracy, FreqOnly);
-        Tip(KvolCaption, () => Messages.Tips.ExtractLevel, FreqOnly);
+        Tip(KvolBox, () => Messages.Tips.ExtractLevel, FreqOnly);
+        Tip(FreqModelRadioGroup, () => Messages.Tips.FreqModel, () => Pair() ? NoX() : Wave() ? Messages.Tips.BecauseFreqOnly : null);
         Tip(LevelRadioGroup, () => Messages.Tips.Level, () =>
             Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : Model() ? Messages.Tips.BecauseModel(ModelName()) : null);
 
@@ -388,18 +440,53 @@ internal sealed partial class SettingsForm : Form
         Tip(BsizeBox, () => Messages.Tips.Block, V3Analysis);
 
         Tip(VnameCheckBox.Parent!, () => Messages.Tips.FileName, () => null);
-        Tip(OutKindCombo.Parent!, () => Messages.Tips.Output, () => null);
+        Tip(SaveDropDown.Parent!, () => Messages.Tips.Output, () => null);
         Tip(GpuCheckBox.Parent!, () => Messages.Tips.Gpu, () => GpuCheckBox.Checked ? null : Messages.Tips.BecauseGpuOff);
 
         Tip(ModelRadioGroup, () => Messages.Tips.Model, () => Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : null);
-        Tip(AlignRadioGroup, () => Messages.Tips.Align, () => OriginalOnly() ? NoX() : Auto() ? Messages.Tips.BecauseAuto : Pair() || (Wave() && Model()) ? null : Messages.Tips.BecauseV3Align);
+        Tip(AlignRadioGroup, () => Messages.Tips.Align, () => OriginalOnly() ? NoX() : Auto() ? Messages.Tips.BecauseAuto : Pair() || !Wave() || Model() ? null : Messages.Tips.BecauseV3Align);
         Tip(SpansBox, () => Messages.Tips.Spans, () =>
             Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : !Model() ? Messages.Tips.BecauseV3Model :
             SideAlgorithm() ? Messages.Tips.BecauseNoSpans(ModelName()) : null);
         Tip(CentreRadioGroup, () => Messages.Tips.Centre, () => Split() ? null : Messages.Tips.BecauseNotSplit);
-        Tip(FindWithinBox, () => Messages.Tips.Repeats, () => Repeats() ? null : Messages.Tips.BecauseNotRepeats);
-        Tip(KickDuckCheckBox, () => Messages.Tips.KickDuck, () =>
-            Pair() ? NoX() : !Wave() ? Messages.Tips.BecauseWaveOnly : !Model() ? Messages.Tips.BecauseV3Model : null);
+        Tip(RepeatsBox, () => Messages.Tips.Repeats, () => Repeats() ? null : Messages.Tips.BecauseNotRepeats);
+        Tip(UpmixRadioGroup, () => Messages.Tips.Upmix, () => Upmix() ? null : Messages.Tips.BecauseNotUpmix);
+        Tip(UpmixLayoutLabel, () => Messages.Tips.Upmix, () =>
+            !Upmix() ? Messages.Tips.BecauseNotUpmix : UpmixRadioGroup.ItemIndex is not (5 or 6) ? Messages.Tips.BecauseFiveOne : null);
+        Tip(UpmixVocalLabel, () => Messages.Tips.Upmix, () =>
+            !Upmix() ? Messages.Tips.BecauseNotUpmix : ReferenceScene() ? null : Messages.Tips.BecauseNotReferenceScene);
+        Tip(MatchLowEndCheckBox, () => Messages.Tips.MatchLowEnd, () => Pair() ? NoX() : null);
+        Tip(SubsonicCheckBox, () => Messages.Tips.RemoveSubsonic, () => Pair() ? NoX() : null);
+        Tip(MatchBandwidthCheckBox, () => Messages.Tips.MatchBandwidth, () => Pair() ? NoX() : null);
+
+        var waveButtons = ModelRadioGroup.Buttons;
+        for (int i = 0; i < waveButtons.Count && i < Messages.ModelOrder.Length; ++i)
+        {
+            int model = Messages.ModelOrder[i], k = i;
+            _links.AddPlain(waveButtons[i], () => Messages.Tips.Stats(Messages.ModelNames[k], Messages.ModelStats[model]));
+        }
+        var freqButtons = FreqModelRadioGroup.Buttons;
+        for (int i = 0; i < freqButtons.Count && i < Messages.FreqStats.Length; ++i)
+        {
+            int k = i;
+            _links.AddPlain(freqButtons[i], () => Messages.Tips.Stats(Messages.FreqModelNames[k], Messages.FreqStats[k]));
+        }
+    }
+
+    private void SyncMethodButtons()
+    {
+        for (int k = 0; k < UseMethodButtons.Length; ++k)
+            UseMethodButtons[k].Checked = MethodRadioGroup.ItemIndex == k;
+    }
+
+    // Frequency と Waveform で共通の部品は 1 つだけ作り、開いている方の page へ移す。
+    private void PlaceShared()
+    {
+        bool wave = PageControl.SelectedTab == WaveTab || (PageControl.SelectedTab != FreqTab && MethodRadioGroup.ItemIndex == 1);
+        var main = wave ? WaveMainPage : FreqMainPage;
+        var settings = wave ? WaveSettingsPage : FreqSettingsPage;
+        if (SharedMain.Parent != main) SharedMain.Parent = main;
+        if (SharedSettings.Parent != settings) SharedSettings.Parent = settings;
     }
 
     private const int FirstSideAlgorithm = 7;

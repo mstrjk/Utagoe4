@@ -3,17 +3,12 @@
 // 実機では dialog open と同時に再生開始。seek bar は ms 単位で、track の 1/10 ごとに tick。
 // TMediaPlayer は Windows MCI の薄い wrapper なので、同じ engine を使うため直接 MCI を叩く。
 
-using System.Runtime.InteropServices;
-using System.Text;
 using Utagoe.Vcl;
 
 namespace Utagoe.Forms;
 
 internal sealed class PlaybackForm : Form
 {
-    // v4 では main window を止めずに何枚でも開けるので、MCI の alias は window ごとに分ける。
-    private static int s_next;
-    private readonly string Alias = "utagoe_play" + Interlocked.Increment(ref s_next);
     private const int BtnPlay = 0, BtnPause = 1, BtnStop = 2, BtnPrev = 3;
 
     private readonly string _path;
@@ -21,9 +16,8 @@ internal sealed class PlaybackForm : Form
     private readonly VclTrackBar _seek;
     private readonly BitBtn _ok;
     private readonly System.Windows.Forms.Timer _timer;
-    private bool _open;
+    private readonly App.MciPlayer _mci = new();
     private bool _updatingSeek;
-    private string? _tempWav;   // MCI が直接開けない形式を再生するための一時 WAV
 
     public PlaybackForm(string path)
     {
@@ -61,7 +55,7 @@ internal sealed class PlaybackForm : Form
         Controls.AddRange(new Control[] { _player, _seek, _ok });
 
         _player.ButtonClick += OnPlayerButton;
-        _seek.ValueChanged += (_, _) => { if (!_updatingSeek) SeekTo(_seek.Value); };
+        _seek.ValueChanged += (_, _) => { if (!_updatingSeek) _mci.Seek(_seek.Value); };
         _timer.Tick += (_, _) => SyncSeek();
 
         VclScaling.Apply(this);
@@ -71,128 +65,50 @@ internal sealed class PlaybackForm : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        _open = Open(_path);
-        if (!_open) _open = OpenConverted();
-        if (!_open)
+        if (!_mci.Load(_path))
         {
             _player.Enabled = false;
             _seek.Enabled = false;
             return;
         }
-
-        int length = Status("length");
+        int length = _mci.Length;
         _seek.Maximum = Math.Max(1, length);
         _seek.TickFrequency = Math.Max(1, length / 10);
         _seek.LargeChange = Math.Max(1, length / 10);
         _timer.Start();
-        Mci($"play {Alias}");
-    }
-
-    /// MCI は長い path をそのまま渡すと失敗することがあるので、その場合だけ 8.3 short path で再試行する。
-    private bool Open(string path)
-    {
-        if (Mci($"open \"{path}\" type waveaudio alias {Alias}"))
-            return Mci($"set {Alias} time format milliseconds");
-
-        var sb = new StringBuilder(1024);
-        if (GetShortPathNameW(path, sb, sb.Capacity) > 0 &&
-            Mci($"open \"{sb}\" type waveaudio alias {Alias}"))
-            return Mci($"set {Alias} time format milliseconds");
-
-        return false;
+        _mci.Play();
     }
 
     private void OnPlayerButton(int button)
     {
-        if (!_open) return;
+        if (!_mci.IsOpen && button == BtnPlay && _mci.Load(_path))
+        {
+            _seek.Maximum = Math.Max(1, _mci.Length);
+            _timer.Start();
+        }
         switch (button)
         {
-            case BtnPlay:
-                Mci($"play {Alias}");
-                break;
-            case BtnPause:
-                // Pause は toggle 動作。再生中なら pause、pause 中なら resume。
-                string mode = StatusText("mode");
-                if (mode == "paused") Mci($"resume {Alias}");
-                else if (mode == "playing") Mci($"pause {Alias}");
-                break;
-            case BtnStop:
-                Mci($"stop {Alias}");
-                break;
-            case BtnPrev:
-                bool playing = StatusText("mode") == "playing";
-                Mci($"seek {Alias} to start");
-                if (playing) Mci($"play {Alias}");
-                break;
+            case BtnPlay: _mci.Play(); break;
+            case BtnPause: _mci.TogglePause(); break;
+            case BtnStop: _mci.Stop(); break;
+            case BtnPrev: _mci.Rewind(); break;
         }
         SyncSeek();
     }
 
-    private void SeekTo(int ms)
-    {
-        if (!_open) return;
-        bool playing = StatusText("mode") == "playing";
-        Mci($"seek {Alias} to {ms}");
-        if (playing) Mci($"play {Alias}");
-    }
-
     private void SyncSeek()
     {
-        if (!_open) return;
+        if (!_mci.IsOpen) return;
         _updatingSeek = true;
-        _seek.Value = Math.Clamp(Status("position"), _seek.Minimum, _seek.Maximum);
+        _seek.Value = Math.Clamp(_mci.Position, _seek.Minimum, _seek.Maximum);
         _updatingSeek = false;
-    }
-
-    /// MP3 / FLAC / 24-bit WAV など MCI の waveaudio が扱えない形式は、core で 16-bit WAV に変換して再生する。
-    private bool OpenConverted()
-    {
-        // 再生用の変換は導入先の cache\ に置く。作れなければ Windows の一時 folder。
-        string dir = App.AppPaths.Cache;
-        try { Directory.CreateDirectory(dir); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { dir = Path.GetTempPath(); }
-        _tempWav = Path.Combine(dir, $"utagoe-play-{Environment.ProcessId}-{Guid.NewGuid():N}.wav");
-        Cursor = Cursors.WaitCursor;
-        try
-        {
-            if (!Native.Core.TranscodeFile(_path, _tempWav, Native.OutputFormat.Wav, Native.OutputDepth.Int16, 0, out _))
-                return false;
-            return Open(_tempWav);
-        }
-        finally
-        {
-            Cursor = Cursors.Default;
-        }
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _timer.Stop();
         _timer.Dispose();
-        if (_open) Mci($"close {Alias}");
-        if (_tempWav != null)
-        {
-            try { File.Delete(_tempWav); } catch (IOException) { }
-        }
+        _mci.Dispose();
         base.OnFormClosed(e);
     }
-
-    private int Status(string item) =>
-        int.TryParse(StatusText(item), out int v) ? v : 0;
-
-    private string StatusText(string item)
-    {
-        var sb = new StringBuilder(128);
-        return mciSendStringW($"status {Alias} {item}", sb, sb.Capacity, IntPtr.Zero) == 0
-            ? sb.ToString() : "";
-    }
-
-    private static bool Mci(string command) =>
-        mciSendStringW(command, null, 0, IntPtr.Zero) == 0;
-
-    [DllImport("winmm.dll", CharSet = CharSet.Unicode)]
-    private static extern int mciSendStringW(string command, StringBuilder? returnString,
-                                             int returnLength, IntPtr callback);
-
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
-    private static extern int GetShortPathNameW(string longPath, StringBuilder shortPath, int length);
 }

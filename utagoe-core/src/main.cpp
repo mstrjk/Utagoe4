@@ -171,7 +171,6 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
-
     AudioBuffer orig, inst;
     AudioInfo origInfo, instInfo;
     std::string err;

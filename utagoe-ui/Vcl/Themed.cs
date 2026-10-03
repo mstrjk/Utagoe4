@@ -217,6 +217,7 @@ internal sealed class ThemedTabControl : TabControl
 
     protected override void OnPaint(PaintEventArgs e)
     {
+        FixItemSize();
         var g = e.Graphics;
         var t = Theme.Current;
         using (var back = new SolidBrush(Parent?.BackColor ?? t.Window)) g.FillRectangle(back, ClientRectangle);
@@ -262,9 +263,19 @@ internal sealed class ThemedTabControl : TabControl
     private IntPtr _hfont;
     private Font? _hfontSource;
 
-    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); _fitQueued = false; QueueFit(); }
+    protected override void OnHandleCreated(EventArgs e) { base.OnHandleCreated(e); _fitQueued = false; FixItemSize(); QueueFit(); }
     protected override void OnSizeChanged(EventArgs e) { base.OnSizeChanged(e); QueueFit(); }
-    protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); QueueFit(); }
+    protected override void OnFontChanged(EventArgs e) { base.OnFontChanged(e); FixItemSize(); QueueFit(); }
+
+    private void FixItemSize()
+    {
+        if (Multiline || TabCount == 0) return;
+        int w = 0;
+        foreach (TabPage p in TabPages) w = Math.Max(w, TextRenderer.MeasureText(p.Text, Font).Width);
+        var size = new Size(w + Font.Height, Font.Height * 11 / 7);
+        if (SizeMode != TabSizeMode.Fixed) SizeMode = TabSizeMode.Fixed;
+        if (ItemSize != size) ItemSize = size;
+    }
 
     protected override void Dispose(bool disposing)
     {

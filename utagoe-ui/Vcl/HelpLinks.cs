@@ -38,6 +38,8 @@ internal sealed class HelpLinks : IDisposable
         _items.Add((target, text));
     }
 
+    public void AddPlain(Control target, Func<string> text) => _items.Add((target, text));
+
     /// 見出しの範囲 (画面座標)。group の見出しは枠の左から 8 px の所に描かれる。
     public static Rectangle CaptionBounds(Control target)
     {

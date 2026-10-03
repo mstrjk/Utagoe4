@@ -69,6 +69,8 @@ struct Context {
     bool quantize = true;
     Params p;
     Source orig, inst;
+    Source analysisInst;
+    bool hasAnalysisInst = false;
     Sink out;
 
     // ScoreOffsets (0x410570) の出力
@@ -93,6 +95,8 @@ struct Context {
     // 代替モデル用。true なら本処理は減算せず、原曲と位置合わせ済みのインストを記録する (int16 scale, interleaved)。
     bool collect = false;
     std::vector<float> colMix, colRef;
+    bool tapRaw = false;
+    std::vector<float> rawTap;
     std::vector<char> colValid;
 
     bool gpuSearch = false;

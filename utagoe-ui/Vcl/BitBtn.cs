@@ -124,6 +124,11 @@ internal sealed class BitBtn : Button
 
         // glyph 左配置は TButtonGlyph.CalcButtonLayout の挙動に合わせる。
         var client = ClientRectangle;
+        if (glyph != null && text.Length > 0 && glyphSize.Width + Math.Max(Spacing, 4) + textSize.Width + 8 > client.Width)
+        {
+            glyph = null;
+            glyphSize = Size.Empty;
+        }
         int spacing = Spacing, margin = GlyphMargin;
         if (glyph == null || text.Length == 0) spacing = 0;
 

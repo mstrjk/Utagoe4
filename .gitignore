@@ -19,3 +19,5 @@ dist/
 
 # 例外: 移植元などの license 文書は英語でも必ず残す。
 !licenses/**/LICENSE*
+**__pycache__
+research/

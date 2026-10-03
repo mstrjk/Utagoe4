@@ -85,8 +85,6 @@ typedef struct UtagoeSettings {
     // app icon の色違いの名前 (UTF-8、例 "standard")。UI が使う。
     char    appIcon[UTAGOE_NAME_MAX];
 
-    int32_t kickDuck;
-
     int32_t centerMethod;
 
     char    uiLanguage[UTAGOE_NAME_MAX];
@@ -95,6 +93,19 @@ typedef struct UtagoeSettings {
     int32_t repeatBreadth;
 
     int32_t overwriteOutput;
+
+    int32_t matchBandwidth;
+
+    int32_t upmixMethod;
+    int32_t upmixSevenOne;
+    int32_t upmixLfe;
+
+    int32_t normalizeOutput;
+
+    int32_t matchLowEnd;
+    int32_t removeSubsonic;
+    int32_t freqModel;
+    int32_t saveMask;
 } UtagoeSettings;
 
 // debug には元実装のデバッグ表示と同じ形式の行を入れる。
@@ -113,6 +124,7 @@ typedef struct UtagoeResult {
     int32_t instrumentalChannelsIn;
     int32_t gpuUsed;
     char    gpuAdapter[128];
+    char    written[4096];
 } UtagoeResult;
 
 // GPU の利用可否。available が 0 なら reason に理由が入る (英語、UTF-8)。

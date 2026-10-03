@@ -8,8 +8,8 @@ internal static class VclGlyph
     private static readonly Dictionary<string, Bitmap> Sheets = new();
     private static readonly Dictionary<(string, Rectangle), Bitmap> Pieces = new();
 
-    private static readonly string[] ButtonRoles = { "check", "x", "question", "folder", "play", "settings", "info", "close" };
-    private static readonly string[] ButtonThemes = { "army", "ice", "teal", "white", "wine" };
+    private static readonly string[] ButtonRoles = { "check", "x", "question", "folder", "play", "settings", "info", "close", "reset", "start", "book" };
+    private static readonly string[] ButtonThemes = { "army", "ice", "silver", "wine" };
     private static readonly string[] MediaButtons = { "MPPLAY", "MPPAUSE", "MPSTOP", "MPPREV" };
     private static readonly (int Enabled, int Disabled)[] MediaWidths = { (17, 17), (13, 12), (17, 17), (20, 20) };
 
@@ -53,11 +53,11 @@ internal static class VclGlyph
 
     public static (Bitmap Enabled, Bitmap Disabled) Button(string role)
     {
-        string theme = App.Theme.Current.Name switch { "standard" => "wine", "silver" => "white", var t => t };
+        string theme = App.Theme.Current.Name switch { "standard" => "wine", var t => t };
         int row = Math.Max(0, Array.IndexOf(ButtonThemes, theme));
         int col = Array.IndexOf(ButtonRoles, role);
         if (col < 0) throw new ArgumentException($"unknown button glyph '{role}'");
-        bool large = role is "check" or "x" or "question";
+        bool large = role is "check" or "x" or "question" or "reset";
         int w = large ? 18 : 16, h = large ? 18 : 16;
         return (Piece("buttons", new Rectangle(36 * col, 18 * row, w, h)),
                 Piece("buttons", new Rectangle(36 * col + w, 18 * row, w, h)));
