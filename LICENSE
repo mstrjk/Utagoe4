@@ -1,0 +1,79 @@
+Utagoe Source License 1.0
+
+Copyright © 2026 Utagoe, Jacob (Jake) Robison
+All rights reserved except as expressly granted below.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and its source code to inspect, study, test, and evaluate the software; 
+modify the software for personal, educational, research, archival, or other non-commercial purposes; 
+extract, adapt, rewrite, or incorporate individual portions of the source code, algorithms, methods, or implementations into another non-commercial project;
+create and distribute non-commercial modifications or derivative works, subject to the restrictions below; and
+publish research, documentation, criticism, comparisons, benchmarks, or technical discussion concerning the software.
+These permissions apply only to the extent permitted by applicable law and this License.
+
+The software is licensed, not transferred. Copyright and ownership of the original Utagoe software remain with their respective copyright holders. 
+Receiving, modifying, or redistributing the software does not make Utagoe itself, its identity, or the original work your property.
+Independent portions derived from or based upon Utagoe may form part of another work where permitted by this License. 
+However, no permission is granted to claim ownership of Utagoe as a whole or to represent a derivative, fork, reconstruction, or substantially equivalent distribution as the original work.
+
+The permissions granted by this License are limited to non-commercial use. 
+Without separate written permission from the copyright holder, you may not sell the software or a derivative of it;
+charge for access to the software or its functionality;
+license or sublicense the software for payment;
+include the software or a substantial derivative of it in a paid product or service;
+use the software primarily to provide a commercial service to third parties;
+use Utagoe itself as a material commercial product, feature, or revenue-generating service; or
+commercially redistribute substantially equivalent functionality derived from Utagoe.
+Utagoe is forever-free. If you have paid for a copy of Utagoe, you have been scammed.
+
+Commercial licensing may be granted separately by the copyright holder.
+Incidental use in a non-commercial project does not become commercial merely because the project's author accepts voluntary donations that do not purchase access, functionality, support, preferential treatment, or licensing rights.
+
+Individual source files, routines, algorithms, implementations, techniques, or other portions of Utagoe may be adapted and incorporated into another non-commercial project.
+Such reuse does not grant permission to redistribute Utagoe itself under another name.
+A project that merely incorporates portions of Utagoe alongside substantial independent work may be treated as a separate work, provided that it does not substantially reproduce Utagoe as a complete application;
+it does not serve primarily as a renamed, repackaged, or lightly modified version of Utagoe;
+it complies with the non-commercial requirements of this License; and
+it does not imply official affiliation or endorsement.
+The purpose of this provision is to permit genuine reuse of Utagoe's components without transferring ownership or control of Utagoe as a complete product.
+
+You may create and distribute non-commercial forks or modified versions of Utagoe.
+Modified distributions must clearly identify themselves as unofficial and modified.
+They must not be represented as the official Utagoe release;
+an authorized release unless authorization was actually granted;
+a continuation maintained by the official Utagoe project; or
+a replacement bearing the identity of the official project.
+A fork may truthfully state that it is "based on Utagoe", "derived from Utagoe", or otherwise describe its relationship to Utagoe.
+
+This License does not grant rights to the Utagoe name, logos, icons, artwork, distinctive visual identity, branding, trade dress, project identity, or designation of a release as official.
+These elements remain reserved to the official Utagoe project and their respective owners.
+The Utagoe name may be used where reasonably necessary for truthful attribution, historical reference, compatibility statements, technical documentation, criticism, comparison, or identification of origin.
+It may not be used in a manner that reasonably implies that an unofficial work is produced, approved, maintained, endorsed, or distributed by the official Utagoe project.
+
+Redistributions containing substantial portions of Utagoe source code must preserve applicable copyright notices;
+this License or a reference identifying the applicable Utagoe-licensed portions; and
+reasonable attribution identifying Utagoe as the source of those portions.
+Minor excerpts, general techniques, independently rewritten concepts, or portions too small to meaningfully identify as Utagoe source code do not require prominent attribution beyond what copyright law or other applicable licenses may require.
+
+Nothing in this License restricts anyone from independently implementing ideas, techniques, algorithms, mathematical methods, workflows, or concepts that are not themselves protected by copyright or other applicable intellectual-property rights.
+This License governs the copyrighted Utagoe materials made available under it. It does not claim exclusive ownership over general ideas, facts, mathematical principles, or independently created implementations.
+
+Modification does not transfer ownership of the original material.
+A contributor owns copyright in their own independently copyrightable additions to the extent provided by law, but does not thereby acquire ownership of the underlying Utagoe project.
+A derivative containing both Utagoe material and independently created material may therefore contain multiple copyright interests.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+Your rights under this License terminate automatically if you materially violate its terms.
+If the violation is corrected within 30 days after you become aware of it, your rights are automatically reinstated unless the copyright holder has separately notified you that reinstatement will not occur because of repeated or intentional violations.
+
+Any use not granted by this License remains reserved.
+The copyright holder may grant separate permissions, including commercial licenses, branding permissions, redistribution rights, or exceptions to particular terms.
+Such permission must be given in writing by an authorized copyright holder.
+
+This License is intended to permit broad non-commercial study, modification, experimentation, and component reuse while preserving ownership of the original Utagoe project;
+the distinction between Utagoe and projects that merely use portions of it;
+control over commercial exploitation; and
+control over the Utagoe identity and designation of official releases.
+
+Permission to use part of Utagoe should not be interpreted as permission to appropriate Utagoe as a complete product.
