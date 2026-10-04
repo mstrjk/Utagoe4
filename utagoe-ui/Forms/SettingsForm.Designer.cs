@@ -58,6 +58,7 @@ partial class SettingsForm
     private VclRadioGroup ModelRadioGroup = null!;
     private VclRadioGroup AlignRadioGroup = null!;
     private TextBox SpansEdit = null!;
+    private BitBtn SpansPickButton = null!;
     private ThemedCheckBox MatchBandwidthCheckBox = null!;
     private ThemedCheckBox MatchLowEndCheckBox = null!;
     private ThemedCheckBox SubsonicCheckBox = null!;
@@ -224,9 +225,10 @@ partial class SettingsForm
         ModelRadioGroup = MakeGroup(App.Messages.ModelGroup, 8, 8, 270, 270, 0, App.Messages.ModelNames);
 
         SpansBox = new VclGroupBox { Text = App.Messages.SpansGroup, Bounds = new Rectangle(286, 154, 270, 82), TabIndex = 4 };
-        SpansEdit = new TextBox { Bounds = new Rectangle(10, 20, 250, 20), MaxLength = 250, TabIndex = 0 };
+        SpansEdit = new TextBox { Bounds = new Rectangle(10, 20, 174, 20), MaxLength = 250, TabIndex = 0 };
+        SpansPickButton = new BitBtn { Text = App.L.T("Pick..."), Bounds = new Rectangle(188, 18, 72, 24), TabIndex = 1 };
         var spansHint = new ThemedLabel { Text = App.Messages.SpansHint, Bounds = new Rectangle(10, 44, 252, 34) };
-        SpansBox.Controls.AddRange(new Control[] { SpansEdit, spansHint });
+        SpansBox.Controls.AddRange(new Control[] { SpansEdit, SpansPickButton, spansHint });
         var modelNote = new ThemedLabel { Text = App.Messages.ModelNote, Bounds = new Rectangle(290, 242, 266, 30) };
         WaveMainPage.Controls.AddRange(new Control[] { ModelRadioGroup, SpansBox, modelNote });
 

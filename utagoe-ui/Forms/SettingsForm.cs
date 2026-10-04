@@ -14,6 +14,20 @@ namespace Utagoe.Forms;
 internal sealed partial class SettingsForm : Form
 {
     private readonly Func<CoreSettings> _current;
+    private readonly Func<string> _originalPath;
+    private SpansForm? _spansForm;
+
+    private void OpenSpansPicker()
+    {
+        if (_spansForm is { IsDisposed: false })
+        {
+            _spansForm.Activate();
+            return;
+        }
+        _spansForm = new SpansForm(_originalPath(), SpansEdit.Text, text => SpansEdit.Text = text);
+        _spansForm.FormClosed += (_, _) => _spansForm = null;
+        _spansForm.Show(this);
+    }
     private readonly HelpLinks _links = new();
     private bool _docked;
 
@@ -21,9 +35,10 @@ internal sealed partial class SettingsForm : Form
     public event Action<CoreSettings>? Applied;
 
     /// current は今の設定を返す。OK のときはその上に画面の値を書く (画面に無い設定、例えば通知の表示可否は保つ)。
-    public SettingsForm(Func<CoreSettings> current)
+    public SettingsForm(Func<CoreSettings> current, Func<string> originalPath)
     {
         _current = current;
+        _originalPath = originalPath;
         InitializeComponent();
         Icon = VclGlyph.AppIcon;
         VclScaling.Apply(this);
@@ -34,6 +49,7 @@ internal sealed partial class SettingsForm : Form
         LPFTrackBar.ValueChanged    += (_, _) => LPFLabel.Text   = TrackLabels.LowPass(LPFTrackBar.Value);
         HPFTrackBar.ValueChanged    += (_, _) => HPFLabel.Text   = TrackLabels.HighPass(HPFTrackBar.Value);
 
+        SpansPickButton.Click += (_, _) => OpenSpansPicker();
         ResetButton.Click += (_, _) => ResetToDefaults();   // 別 window では確かめた後も、OK で確定するまで保存しない
         OkBitBtn.DialogResult = CanBitBtn.DialogResult = DialogResult.None;
         OkBitBtn.Click += (_, _) => Apply();

@@ -62,7 +62,7 @@ internal sealed partial class MainForm
 
     private SettingsForm CreateSettings()
     {
-        var f = new SettingsForm(() => _settings.Values);
+        var f = new SettingsForm(() => _settings.Values, () => Edit1.Text.Trim());
         f.Applied += OnSettingsApplied;
         f.FormClosed += (_, _) => { if (_settingsForm == f) _settingsForm = null; };
         return _settingsForm = f;

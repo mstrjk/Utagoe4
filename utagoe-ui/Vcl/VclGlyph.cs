@@ -72,5 +72,23 @@ internal static class VclGlyph
                 Piece("buttons", new Rectangle(40 * i + 20, y, MediaWidths[i].Disabled, 16)));
     }
 
+    private const int ProcessCell = 52, ProcessRow = 20;
+    private static readonly (string Name, int Width, int Height)[] ProcessIcons =
+    {
+        ("frequency", 32, 15), ("waveform", 49, 15), ("centresides", 40, 16), ("repeats", 29, 17),
+        ("upmix", 32, 17), ("output", 31, 15), ("recovery", 16, 16), ("truncate", 16, 13),
+        ("pitchshift", 28, 16), ("denoise", 26, 15), ("vocaldenoise", 18, 16), ("dehum", 17, 16),
+        ("declick", 27, 15), ("decrackle", 27, 16), ("debreath", 19, 16), ("debleed", 28, 15),
+    };
+
+    public static Bitmap ProcessIcon(string name)
+    {
+        int i = Array.FindIndex(ProcessIcons, p => p.Name == name);
+        if (i < 0) throw new ArgumentException($"unknown processing icon '{name}'");
+        var (_, w, h) = ProcessIcons[i];
+        int row = Math.Max(0, Array.IndexOf(App.AppIcons.Names, App.Theme.Current.Name));
+        return Piece("processicons", new Rectangle(ProcessCell * i, ProcessRow * row, w, h));
+    }
+
     public static Icon AppIcon => App.AppIcons.CurrentIcon;
 }
