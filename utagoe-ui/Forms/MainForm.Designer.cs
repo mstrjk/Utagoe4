@@ -3,7 +3,8 @@
 
 #nullable enable
 
-using Utagoe.Vcl;
+using Utagoe.App;
+using Utagoe.Ui;
 
 namespace Utagoe.Forms;
 
@@ -23,6 +24,7 @@ partial class MainForm
     private TextBox Edit3 = null!;
     private ThemedCheckBox OverwriteCheckBox = null!;
     private ThemedCheckBox NormaliseCheckBox = null!;
+    private ThemedCheckBox CacheCheckBox = null!;
     private BitBtn BitBtn1 = null!;
     private BitBtn BitBtn2 = null!;
     private BitBtn BitBtn3 = null!;
@@ -31,6 +33,7 @@ partial class MainForm
     private BitBtn StartBtn = null!;
     private BitBtn SetBitBtn = null!;
     private BitBtn HelpBtn = null!;
+    private BitBtn FaqBtn = null!;
     private BitBtn AboutBtn = null!;
     private BitBtn CloseBtn = null!;
     private Panel DbgPanel = null!;
@@ -43,6 +46,15 @@ partial class MainForm
         base.Dispose(disposing);
     }
 
+    private static readonly WindowSpec Definition = new()
+    {
+        ClientSize = new Size(569, 294),
+        Buttons = TitleButtons.All,
+        Taskbar = true,
+        Placement = Placement.CenterScreen,
+        Title = () => "Utagoe",
+    };
+
     private void InitializeComponent()
     {
         components = new System.ComponentModel.Container();
@@ -50,99 +62,58 @@ partial class MainForm
         ElapsedTimer = new System.Windows.Forms.Timer(components) { Interval = 1000 };
 
         SuspendLayout();
-
-        // window は single border、screen center、Tahoma 9pt。v3 は system menu + minimize のみ。
-        // v4 は最大化もでき、最大化すると Settings と terminal を中に並べる (MainForm.Panels.cs)。
-        AutoScaleDimensions = new SizeF(96F, 96F);
-        AutoScaleMode = AutoScaleMode.Dpi;
-        ClientSize = new Size(569, 294);
-        Font = new Font("Tahoma", 9F);
-        FormBorderStyle = FormBorderStyle.FixedSingle;
-        MaximizeBox = true;
-        StartPosition = FormStartPosition.CenterScreen;
-        Text = "Utagoe";
         AllowDrop = true;
 
-        // v4: 入力はどの形式でもよいので ".WAV" を外し、出力はファイルではなく folder を選ぶ。
-        Label1 = MakeLabel("Input File (Original)", 16, 24);
-        Label2 = MakeLabel("Input File (Instrumental)", 16, 96);
-        Label3 = MakeLabel("Output Folder", 16, 184);
-        WformLbl1 = MakeLabel("", 196, 24);
-        WformLbl2 = MakeLabel("", 196, 96);
-        InfoLabel = MakeLabel("", 464, 272);
+        Label1 = Element.Label("Input File (Original)", 16, 24, transparent: true);
+        Label2 = Element.Label("Input File (Instrumental)", 16, 96, transparent: true);
+        Label3 = Element.Label("Output Folder", 16, 184, transparent: true);
+        WformLbl1 = Element.Dynamic(196, 24, transparent: true);
+        WformLbl2 = Element.Dynamic(196, 96, transparent: true);
+        InfoLabel = Element.Dynamic(464, 272, transparent: true);
 
-        ProgBar1 = new ThemedProgressBar { Bounds = new Rectangle(8, 270, 447, 17), TabIndex = 14 };
+        ProgBar1 = Element.Progress(new Rectangle(8, 270, 447, 17), 15);
 
-        Edit1 = new TextBox { Bounds = new Rectangle(24, 48, 337, 20), TabIndex = 0, AllowDrop = true };
-        Edit2 = new TextBox { Bounds = new Rectangle(24, 120, 337, 20), TabIndex = 3, AllowDrop = true };
-        Edit3 = new TextBox { Bounds = new Rectangle(24, 208, 337, 20), TabIndex = 6, AllowDrop = true };
-        OverwriteCheckBox = new ThemedCheckBox { Text = App.Messages.OverwriteFiles, Bounds = new Rectangle(24, 236, 180, 17), TabIndex = 8 };
-        NormaliseCheckBox = new ThemedCheckBox { Text = App.Messages.NormaliseOutput, Bounds = new Rectangle(212, 236, 149, 17), TabIndex = 9 };
-        Hints.SetToolTip(NormaliseCheckBox, App.Messages.NormaliseHint);
+        Edit1 = Element.Field(new Rectangle(24, 48, 337, 20), 0, drop: true);
+        Edit2 = Element.Field(new Rectangle(24, 120, 337, 20), 3, drop: true);
+        Edit3 = Element.Field(new Rectangle(24, 208, 337, 20), 6, drop: true);
+        OverwriteCheckBox = Element.Check(() => Messages.OverwriteFiles, new Rectangle(24, 236, 180, 17), 8);
+        NormaliseCheckBox = Element.Check(() => Messages.NormaliseOutput, new Rectangle(212, 236, 149, 17), 9);
+        UiText.Tip(Hints, NormaliseCheckBox, () => Messages.NormaliseHint);
+        CacheCheckBox = Element.Check(() => Messages.CacheSteps, new Rectangle(370, 236, 80, 17), 10);
+        UiText.Tip(Hints, CacheCheckBox, () => Messages.CacheHint);
 
-        BitBtn1  = MakeGlyphButton("folder",   376, 46,  1);
-        PlayBtn1 = MakeGlyphButton("play",     416, 46,  2);
-        BitBtn2  = MakeGlyphButton("folder",   376, 118, 4);
-        PlayBtn2 = MakeGlyphButton("play",     416, 118, 5);
-        BitBtn3  = MakeGlyphButton("folder",   376, 206, 7);
-        // v4: 出力欄は folder なので、v3 の出力の再生 button (PlayBtn3) は置かない。
+        BitBtn1  = Element.Glyph("folder", new Rectangle(376, 46, 25, 25), 1);
+        PlayBtn1 = Element.Glyph("play",   new Rectangle(416, 46, 25, 25), 2);
+        BitBtn2  = Element.Glyph("folder", new Rectangle(376, 118, 25, 25), 4);
+        PlayBtn2 = Element.Glyph("play",   new Rectangle(416, 118, 25, 25), 5);
+        BitBtn3  = Element.Glyph("folder", new Rectangle(376, 206, 25, 25), 7);
 
-        // ParentFont=False の control も VCL と同様に font scaling される。
-        // v4: Settings / Help / About は v3 の DFM では glyph を左端から固定 margin で置いていたが、
-        // 拡大後の button では中身が左に寄って見えるので、glyph と caption をまとめて中央に置く (GlyphMargin 既定 -1)。
-        StartBtn = new BitBtn { Bounds = new Rectangle(464, 16, 89, 57), Text = "Start", TabIndex = 9, Font = new Font("Tahoma", 9F) }.WithOwnFont();
-        StartBtn.SetGlyph("start");
+        StartBtn = Element.Button(() => IsRunning ? Messages.Running : Messages.Start, new Rectangle(464, 16, 89, 57), 9, "start");
+        StartBtn.Font = new Font("Tahoma", 9F);
+        StartBtn.WithOwnFont();
 
-        SetBitBtn = new BitBtn
-        {
-            Bounds = new Rectangle(464, 152, 89, 25), Text = "Settings...", TabIndex = 10,
-            Spacing = 6,
-        };
-        SetBitBtn.SetGlyph("settings");
+        SetBitBtn = Element.Button("Settings...", new Rectangle(464, 112, 89, 25), 10, "settings");
+        SetBitBtn.Spacing = 6;
+        HelpBtn = Element.Button("Help...", new Rectangle(464, 152, 89, 25), 11, "question");
+        FaqBtn = Element.Button("FAQ...", new Rectangle(464, 192, 89, 25), 12, "book");
 
-        HelpBtn = new BitBtn
-        {
-            Bounds = new Rectangle(464, 192, 89, 25), Text = "Help...", TabIndex = 11,
-        };
-        HelpBtn.SetKind(BitBtnKind.Help);
-        HelpBtn.SetGlyph("book");
+        AboutBtn = Element.Glyph("info", new Rectangle(464, 232, 25, 25), 13);
+        UiText.Tip(Hints, AboutBtn, () => L.T("Version Info"));
 
-        AboutBtn = new BitBtn { Bounds = new Rectangle(464, 232, 25, 25), TabIndex = 12 };
-        AboutBtn.SetGlyph("info");
-        Hints.SetToolTip(AboutBtn, "Version Info");
+        CloseBtn = Element.Button("Quit", new Rectangle(490, 232, 63, 25), 14, "close");
+        CloseBtn.Spacing = 5;
 
-        CloseBtn = new BitBtn
-        {
-            Bounds = new Rectangle(490, 232, 63, 25), Text = "Quit", TabIndex = 13, Spacing = 5,
-        };
-        CloseBtn.SetGlyph("close");
-
-        // 角の 8x8 panel はほぼ見えないが、double-click で debug mode を切り替える hidden control。
-        DbgPanel = new Panel { Bounds = new Rectangle(9, 256, 8, 8), TabIndex = 15, TabStop = false };
+        DbgPanel = Element.Box(new Rectangle(9, 256, 8, 8), 16);
+        DbgPanel.TabStop = false;
 
         Controls.AddRange(new Control[]
         {
             Label1, Label2, Label3, WformLbl1, WformLbl2, InfoLabel, ProgBar1,
-            Edit1, BitBtn1, PlayBtn1, Edit2, BitBtn2, PlayBtn2, Edit3, BitBtn3, OverwriteCheckBox, NormaliseCheckBox,
-            StartBtn, SetBitBtn, HelpBtn, AboutBtn, CloseBtn, DbgPanel,
+            Edit1, BitBtn1, PlayBtn1, Edit2, BitBtn2, PlayBtn2, Edit3, BitBtn3, OverwriteCheckBox, NormaliseCheckBox, CacheCheckBox,
+            StartBtn, SetBitBtn, HelpBtn, FaqBtn, AboutBtn, CloseBtn, DbgPanel,
         });
 
         ResumeLayout(false);
         PerformLayout();
-    }
-
-    private static Label MakeLabel(string text, int left, int top) => new ThemedLabel()
-    {
-        Text = text,
-        Location = new Point(left, top),
-        AutoSize = true,
-        BackColor = Color.Transparent,
-    };
-
-    private static BitBtn MakeGlyphButton(string glyph, int left, int top, int tabIndex)
-    {
-        var b = new BitBtn { Bounds = new Rectangle(left, top, 25, 25), TabIndex = tabIndex };
-        b.SetGlyph(glyph);
-        return b;
     }
 }

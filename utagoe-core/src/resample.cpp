@@ -3,6 +3,7 @@
 // rate 変換は Kaiser 窓 sinc。任意比率に対応し、出力位置は整数演算で求めて長尺でも drift しない。
 
 #include "utagoe.h"
+#include "mathconst.h"
 
 #include <algorithm>
 #include <atomic>
@@ -13,7 +14,6 @@
 namespace utagoe {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 // sinc の片側ゼロ交差数。多いほど遷移帯域が狭くなる。128 で遷移幅は低い方の rate の約 2.5%。
 constexpr int kZeroCrossings = 128;

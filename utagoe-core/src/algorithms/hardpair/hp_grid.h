@@ -2,13 +2,13 @@
 #define UTAGOE_HP_GRID_H
 
 #include "hp.h"
+#include "mathconst.h"
 
 #include <vector>
 
 namespace utagoe {
 namespace hp {
 
-constexpr double kPi = 3.14159265358979323846;
 
 struct Grid {
     int F = 0, T = 0;

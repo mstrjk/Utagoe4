@@ -1,4 +1,6 @@
 #include "hp.h"
+#include "mathconst.h"
+#include "gpu.h"
 #include "parallel.h"
 
 #include <algorithm>
@@ -9,7 +11,6 @@ namespace utagoe {
 namespace hp {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 int findSpan(const std::vector<double>& t, int nCoef, double x) {
     if (x >= t[static_cast<std::size_t>(nCoef)]) return nCoef - 1;
@@ -51,9 +52,17 @@ struct Anchor {
     bool used = false;
 };
 
-std::pair<double, double> anchorDelay(const double* yIn, const double* xIn, int len, int maxLag, int oversample,
-                                      const std::vector<double>& win, std::size_t n, const std::vector<cd>& twiddle) {
-    std::vector<double> y(yIn, yIn + len), x(xIn, xIn + len);
+struct AnchorInput {
+    std::vector<double> y, x;
+    double energy = 0;
+};
+
+AnchorInput prepareAnchor(const double* yIn, const double* xIn, int len, const std::vector<double>& win) {
+    AnchorInput in;
+    std::vector<double>& y = in.y;
+    std::vector<double>& x = in.x;
+    y.assign(yIn, yIn + len);
+    x.assign(xIn, xIn + len);
     double my = 0, mx = 0;
     for (int i = 0; i < len; ++i) { my += y[static_cast<std::size_t>(i)]; mx += x[static_cast<std::size_t>(i)]; }
     my /= len;
@@ -65,35 +74,60 @@ std::pair<double, double> anchorDelay(const double* yIn, const double* xIn, int 
         ny += y[static_cast<std::size_t>(i)] * y[static_cast<std::size_t>(i)];
         nx += x[static_cast<std::size_t>(i)] * x[static_cast<std::size_t>(i)];
     }
-    const double energy = std::sqrt(nx) * std::sqrt(ny);
+    in.energy = std::sqrt(nx) * std::sqrt(ny);
+    return in;
+}
+
+std::pair<double, double> finishAnchor(const double* acc, double c0, int maxLag, int oversample, long long N, double energy) {
+    const int count = 2 * maxLag * oversample + 1;
+    std::vector<double> vals(static_cast<std::size_t>(count));
+    for (int li = 0; li < count; ++li)
+        vals[static_cast<std::size_t>(li)] = (c0 + 2.0 * acc[li]) / static_cast<double>(N) * oversample;
+    const int k = static_cast<int>(std::max_element(vals.begin(), vals.end()) - vals.begin());
+    double frac = 0.0;
+    if (k > 0 && k < count - 1) {
+        const double a = vals[static_cast<std::size_t>(k - 1)], b = vals[static_cast<std::size_t>(k)], c0v = vals[static_cast<std::size_t>(k + 1)];
+        const double den = a - 2 * b + c0v;
+        if (std::abs(den) > 1e-30) frac = std::clamp(0.5 * (a - c0v) / den, -0.5, 0.5);
+    }
+    const double lag = static_cast<double>(k - maxLag * oversample) + frac;
+    return {-lag / oversample, std::clamp(vals[static_cast<std::size_t>(k)] / energy, 0.0, 1.0)};
+}
+
+std::pair<double, double> anchorDelay(const double* yIn, const double* xIn, int len, int maxLag, int oversample,
+                                      const std::vector<double>& win, std::size_t n, const std::vector<cd>& twiddle) {
+    const AnchorInput in = prepareAnchor(yIn, xIn, len, win);
+    const double energy = in.energy;
     if (energy < 1e-15) return {0.0, 0.0};
-    const std::vector<cd> Y = rfftAny(y, n), X = rfftAny(x, n);
+    const std::vector<cd> Y = rfftAny(in.y, n), X = rfftAny(in.x, n);
     const std::size_t half = n / 2 + 1;
     std::vector<cd> c(half);
     for (std::size_t k = 0; k < half; ++k) c[k] = Y[k] * std::conj(X[k]);
     const long long N = static_cast<long long>(n) * oversample;
     const int count = 2 * maxLag * oversample + 1;
-    std::vector<double> vals(static_cast<std::size_t>(count));
-    for (int li = 0; li < count; ++li) {
-        const long long m = li - maxLag * oversample;
-        double acc = 0.0;
-        for (std::size_t k = 1; k < half; ++k) {
-            long long idx = (static_cast<long long>(k) * m) % N;
-            if (idx < 0) idx += N;
-            const cd e = twiddle[static_cast<std::size_t>(idx)];
-            acc += c[k].real() * e.real() - c[k].imag() * e.imag();
+    std::vector<double> accs(static_cast<std::size_t>(count));
+    constexpr int kLanes = 4;
+    for (int li0 = 0; li0 < count; li0 += kLanes) {
+        const int lanes = std::min(kLanes, count - li0);
+        long long step[kLanes] = {}, idx[kLanes] = {};
+        double acc[kLanes] = {};
+        for (int j = 0; j < lanes; ++j) {
+            const long long m = li0 + j - maxLag * oversample;
+            step[j] = ((m % N) + N) % N;
+            idx[j] = 0;
         }
-        vals[static_cast<std::size_t>(li)] = (c[0].real() + 2.0 * acc) / static_cast<double>(N) * oversample;
+        for (std::size_t k = 1; k < half; ++k) {
+            const double cr = c[k].real(), ci = c[k].imag();
+            for (int j = 0; j < lanes; ++j) {
+                idx[j] += step[j];
+                if (idx[j] >= N) idx[j] -= N;
+                const cd e = twiddle[static_cast<std::size_t>(idx[j])];
+                acc[j] += cr * e.real() - ci * e.imag();
+            }
+        }
+        for (int j = 0; j < lanes; ++j) accs[static_cast<std::size_t>(li0 + j)] = acc[j];
     }
-    const int k = static_cast<int>(std::max_element(vals.begin(), vals.end()) - vals.begin());
-    double frac = 0.0;
-    if (k > 0 && k < count - 1) {
-        const double a = vals[static_cast<std::size_t>(k - 1)], b = vals[static_cast<std::size_t>(k)], c0 = vals[static_cast<std::size_t>(k + 1)];
-        const double den = a - 2 * b + c0;
-        if (std::abs(den) > 1e-30) frac = std::clamp(0.5 * (a - c0) / den, -0.5, 0.5);
-    }
-    const double lag = static_cast<double>(k - maxLag * oversample) + frac;
-    return {-lag / oversample, std::clamp(vals[static_cast<std::size_t>(k)] / energy, 0.0, 1.0)};
+    return finishAnchor(accs.data(), c[0].real(), maxLag, oversample, N, energy);
 }
 
 }
@@ -272,7 +306,13 @@ TimeMap initialMap(const Audio& mix, const Audio& ref, double sr) {
         all.push_back(r.score);
         if (r.score > 0.4) { t.push_back(r.sec); d.push_back(r.delay); qv.push_back(r.score); }
     }
-    if (t.size() < 8 || medianOf(all) < 0.5) throw Error("the time anchors between the two files are not reliable enough for protected alignment");
+    double widestGap = t.empty() ? duration : std::max(t.front(), duration - t.back());
+    for (std::size_t i = 1; i < t.size(); ++i) widestGap = std::max(widestGap, t[i] - t[i - 1]);
+    const bool enough = t.size() >= 8 && static_cast<double>(t.size()) >= 0.25 * static_cast<double>(all.size());
+    const bool spread = widestGap <= std::max(30.0, 0.2 * duration);
+    const bool strong = t.size() >= 8 && medianOf(all) >= 0.5;
+    if (!strong && (!enough || !spread || medianOf(all) < 0.3))
+        throw Error("the time anchors between the two files are not reliable enough for protected alignment");
     map.stages.push_back(fitSpline(t, d, qv, duration, 8.0, 0.5, 0.02));
     return map;
 }
@@ -350,7 +390,13 @@ Audio warpReference(const Audio& ref, std::size_t length, const TimeMap& map, do
 
 void refineMap(const Audio& mix, const Audio& warped, TimeMap& map, double sr, double spacing) {
     const Sos sos = butterBandpass(3, 1500.0, std::min(14000.0, sr * 0.43), sr);
-    const std::vector<double> ys = sosfiltfilt(sos, side(mix)), xs = sosfiltfilt(sos, side(warped));
+    std::vector<double> ys, xs;
+    parallelFor(2, 1, [&](long long b0, long long e0) {
+        for (long long i = b0; i < e0; ++i) {
+            if (i == 0) ys = sosfiltfilt(sos, side(mix));
+            else xs = sosfiltfilt(sos, side(warped));
+        }
+    });
     const double duration = static_cast<double>(mix.frames()) / sr;
     const int win = static_cast<int>(0.20 * sr);
     const std::vector<double> secs = arange(0.4, duration - 0.4, 0.25);
@@ -361,6 +407,57 @@ void refineMap(const Audio& mix, const Audio& warped, TimeMap& map, double sr, d
     std::vector<cd> twiddle(N);
     for (std::size_t i = 0; i < N; ++i) twiddle[i] = std::polar(1.0, 2.0 * kPi * static_cast<double>(i) / static_cast<double>(N));
     std::vector<Anchor> recs(secs.size());
+    bool done = false;
+    if (gpu::allowed()) {
+        std::vector<AnchorInput> inputs(secs.size());
+        std::vector<char> valid(secs.size(), 0);
+        parallelFor(static_cast<long long>(secs.size()), 8, [&](long long b0, long long e0) {
+            for (long long i = b0; i < e0; ++i) {
+                const long long a = static_cast<long long>(secs[static_cast<std::size_t>(i)] * sr) - win / 2;
+                if (a < 0 || a + win > static_cast<long long>(ys.size())) continue;
+                inputs[static_cast<std::size_t>(i)] = prepareAnchor(ys.data() + a, xs.data() + a, win, w);
+                valid[static_cast<std::size_t>(i)] = 1;
+            }
+        });
+        std::vector<std::size_t> live;
+        std::vector<const double*> yp, xp;
+        for (std::size_t i = 0; i < secs.size(); ++i)
+            if (valid[i] && inputs[i].energy >= 1e-15) {
+                live.push_back(i);
+                yp.push_back(inputs[i].y.data());
+                xp.push_back(inputs[i].x.data());
+            }
+        const std::shared_ptr<const BluesteinPlan> plan = bluesteinPlan(n);
+        gpu::AnchorSetup setup;
+        setup.len = win;
+        setup.n = static_cast<int>(n);
+        setup.m = static_cast<int>(plan->m);
+        setup.half = static_cast<int>(n / 2 + 1);
+        setup.lags = 2 * 12 * oversample + 1;
+        setup.lagStart = -12 * oversample;
+        setup.bigN = static_cast<int>(N);
+        setup.chirp = plan->chirp.data();
+        setup.kernel = plan->kernel.data();
+        setup.twForward = rc::fftTwiddles(plan->m, false).data();
+        setup.twInverse = rc::fftTwiddles(plan->m, true).data();
+        setup.lagTwiddle = twiddle.data();
+        std::vector<double> acc, c0;
+        if (live.empty() || gpu::anchorScan(setup, yp, xp, acc, c0)) {
+            for (std::size_t i = 0; i < secs.size(); ++i) {
+                recs[i].sec = secs[i];
+                if (valid[i]) recs[i].used = true;
+            }
+            for (std::size_t j = 0; j < live.size(); ++j) {
+                const std::size_t i = live[j];
+                const auto [delay, score] = finishAnchor(acc.data() + j * static_cast<std::size_t>(setup.lags), c0[j], 12, oversample,
+                                                         static_cast<long long>(N), inputs[i].energy);
+                recs[i].delay = delay;
+                recs[i].score = score;
+            }
+            done = true;
+        }
+    }
+    if (!done)
     parallelFor(static_cast<long long>(secs.size()), 2, [&](long long b0, long long e0) {
         for (long long i = b0; i < e0; ++i) {
             const double sec = secs[static_cast<std::size_t>(i)];

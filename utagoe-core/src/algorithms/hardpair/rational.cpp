@@ -1,4 +1,5 @@
 #include "hp.h"
+#include "mathconst.h"
 #include "parallel.h"
 
 #include <algorithm>
@@ -9,7 +10,6 @@ namespace utagoe {
 namespace hp {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 cd response(double f, double sr, double fc, int order, double delay) {
     const cd z = std::polar(1.0, -2.0 * kPi * f / sr);

@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="88" height="88" viewBox="1 1 88 88" shape-rendering="crispEdges">
+  <g id="LayerMainColour" inkscape:groupmode="layer" inkscape:label="LayerMainColour">
+    <path fill="#ae000a" d="M39 10h10v3h-10z M45 13h6v3h-6z M37 13h2v5h-2z M37 21h2v2h-2z M37 26h2v2h-2z M42 16h5v17h-5z M37 31h2v2h-2z M29 36h3v3h-3z M37 36h2v8h-2z M42 36h10v8h-10z M58 36h2v8h-2z M29 41h3v3h-3z M29 46h3v16h-3z M58 46h2v18h-2z M32 62h2v2h-2z M34 64h3v3h-3z M55 64h2v3h-2z M37 67h18v2h-18z"/>
+  </g>
+  <g id="LayerOutline" inkscape:groupmode="layer" inkscape:label="LayerOutline">
+    <path fill="#512929" d="M37 8h15v2h-15z M34 10h3v3h-3z M52 10h3v3h-3z M32 13h2v20h-2z M55 13h2v20h-2z M29 33h31v3h-31z M32 36h2v8h-2z M55 36h2v8h-2z M32 44h25v2h-25z M32 46h2v11h-2z M55 46h2v11h-2z M32 57h5v2h-5z M52 57h5v2h-5z M32 59h2v3h-2z M37 59h2v3h-2z M50 59h2v3h-2z M27 36h2v28h-2z M60 36h2v28h-2z M55 59h2v5h-2z M34 62h3v2h-3z M39 62h13v2h-13z M29 64h3v3h-3z M37 64h2v3h-2z M52 64h3v3h-3z M32 67h2v2h-2z M57 67h3v2h-3z M34 69h8v3h-8z M50 69h7v3h-7z M40 72h2v5h-2z M50 72h2v5h-2z M40 77h12v3h-12z M42 80h2v9h-2z M47 80h2v9h-2z"/>
+  </g>
+  <g id="LayerOutlineEnlarge" inkscape:groupmode="layer" inkscape:label="LayerOutlineEnlarge">
+    <path fill="#512929" d="M39 72h1v8h-1z M49 80h1v9h-1z"/>
+  </g>
+  <g id="LayerMicHighlightsExtra" inkscape:groupmode="layer" inkscape:label="LayerMicHighlightsExtra">
+    <path fill="#d498a1" d="M49 10h1v3h-1z M44 13h1v2h-1z M51 13h1v3h-1z M57 36h1v8h-1z M57 46h1v18h-1z M45 82h2v7h-2z"/>
+  </g>
+  <g id="LayerHighlightWhite" inkscape:groupmode="layer" inkscape:label="LayerHighlightWhite">
+    <path fill="#ffcddc" d="M37 10h2v3h-2z M50 10h2v3h-2z M39 13h5v2h-5z M34 13h3v3h-3z M52 13h3v3h-3z M39 15h3v3h-3z M39 21h3v2h-3z M39 26h3v2h-3z M39 31h3v2h-3z M29 39h3v2h-3z M39 36h3v8h-3z"/>
+  </g>
+  <g id="LayerStandBlend" inkscape:groupmode="layer" inkscape:label="LayerStandBlend">
+    <path fill="#5f050c" d="M44 81h1v1h-1z"/>
+    <path fill="#6a0206" d="M44 80h1v1h-1z"/>
+    <path fill="#9c2030" d="M46 80h1v1h-1z"/>
+    <path fill="#9d1f33" d="M45 81h1v1h-1z"/>
+    <path fill="#9d1f2f" d="M46 81h1v1h-1z"/>
+    <path fill="#9e2034" d="M45 80h1v1h-1z"/>
+  </g>
+  <g id="LayerStand" inkscape:groupmode="layer" inkscape:label="LayerStand">
+    <path fill="#8d0020" d="M34 46h3v11h-3z M52 46h3v11h-3z M37 57h2v2h-2z M50 57h2v2h-2z M39 59h3v3h-3z M47 59h3v3h-3z M42 69h8v3h-8z M47 72h3v5h-3z"/>
+    <path fill="#c10734" d="M37 46h2v8h-2z M42 46h10v8h-10z M37 54h5v3h-5z M45 54h7v3h-7z M39 57h11v2h-11z M42 59h5v3h-5z M42 72h2v5h-2z"/>
+    <path fill="#ba2541" d="M44 72h1v1h-1z"/>
+    <path fill="#bc2241" d="M44 76h1v1h-1z"/>
+    <path fill="#bc2242" d="M44 75h1v1h-1z"/>
+    <path fill="#ba2944" d="M44 74h1v1h-1z"/>
+    <path fill="#ba2946" d="M44 73h1v1h-1z"/>
+    <path fill="#b84959" d="M45 73h1v1h-1z"/>
+    <path fill="#bb4354" d="M46 76h1v1h-1z"/>
+    <path fill="#bc4457" d="M46 75h1v1h-1z"/>
+    <path fill="#bc4559" d="M46 74h1v1h-1z"/>
+    <path fill="#bd4154" d="M46 72h1v1h-1z"/>
+    <path fill="#bc4251" d="M45 76h1v1h-1z"/>
+    <path fill="#bc4253" d="M45 72h1v1h-1z"/>
+    <path fill="#bc4559" d="M45 75h1v1h-1z"/>
+    <path fill="#bb485a" d="M45 74h1v1h-1z"/>
+    <path fill="#bd4357" d="M46 73h1v1h-1z"/>
+  </g>
+  <g id="LayerStandShadow" inkscape:groupmode="layer" inkscape:label="LayerStandShadow">
+    <path fill="#992333" d="M34 36h3v8h-3z M52 36h3v8h-3z M29 44h3v2h-3z M57 44h3v2h-3z M29 62h3v2h-3z M32 64h2v3h-2z M57 64h3v3h-3z M34 67h3v2h-3z M55 67h2v2h-2z M44 82h1v7h-1z"/>
+  </g>
+  <g id="LayerVoicePieceBlend" inkscape:groupmode="layer" inkscape:label="LayerVoicePieceBlend">
+    <path fill="#d38f94" d="M44 15h1v1h-1z"/>
+    <path fill="#cda3a6" d="M43 15h1v1h-1z"/>
+    <path fill="#cdabb0" d="M42 15h1v1h-1z"/>
+  </g>
+  <g id="LayerMicLeftHigh" inkscape:groupmode="layer" inkscape:label="LayerMicLeftHigh">
+    <path fill="#d04755" d="M36 17h1v1h-1z M36 22h1v1h-1z M36 27h1v1h-1z M35 32h2v1h-2z"/>
+    <path fill="#d04f65" d="M35 16h1v1h-1z M35 21h1v1h-1z M35 26h1v1h-1z M34 31h1v1h-1z"/>
+    <path fill="#cf5165" d="M35 17h1v1h-1z M35 22h1v1h-1z M35 27h1v1h-1z M34 32h1v1h-1z"/>
+    <path fill="#cd5769" d="M34 17h1v1h-1z M34 22h1v1h-1z M34 27h1v1h-1z"/>
+    <path fill="#d34858" d="M36 16h1v1h-1z M36 21h1v1h-1z M36 26h1v1h-1z M35 31h2v1h-2z"/>
+    <path fill="#d05468" d="M34 16h1v1h-1z M34 21h1v1h-1z M34 26h1v1h-1z"/>
+  </g>
+  <g id="LayerMicRibs" inkscape:groupmode="layer" inkscape:label="LayerMicRibs">
+    <path fill="#64121f" d="M34 18h5v3h-5z M50 18h5v3h-5z M34 23h5v3h-5z M50 23h5v3h-5z M34 28h5v3h-5z M50 28h5v3h-5z"/>
+  </g>
+  <g id="LayerStandHighlights" inkscape:groupmode="layer" inkscape:label="LayerStandHighlights">
+    <path fill="#bc2943" d="M44 54h1v3h-1z"/>
+    <path fill="#b94d5e" d="M39 46h3v8h-3z M42 54h2v3h-2z"/>
+  </g>
+  <g id="LayerMicShadowExtras" inkscape:groupmode="layer" inkscape:label="LayerMicShadowExtras">
+    <path fill="#972933" d="M39 20h1v1h-1z M39 25h1v1h-1z M39 30h1v1h-1z"/>
+    <path fill="#9d1c2a" d="M40 20h1v1h-1z M40 25h1v1h-1z M40 30h1v1h-1z"/>
+    <path fill="#9d1f33" d="M41 20h1v1h-1z M41 25h1v1h-1z M41 30h1v1h-1z"/>
+    <path fill="#a1202e" d="M39 18h1v1h-1z M39 23h1v1h-1z M39 28h1v1h-1z"/>
+    <path fill="#a41f35" d="M39 19h1v1h-1z M39 24h1v1h-1z M39 29h1v1h-1z"/>
+    <path fill="#af142a" d="M40 19h1v1h-1z M40 24h1v1h-1z M40 29h1v1h-1z"/>
+    <path fill="#af182c" d="M40 18h1v1h-1z M40 23h1v1h-1z M40 28h1v1h-1z"/>
+    <path fill="#af182e" d="M41 19h1v1h-1z M41 24h1v1h-1z M41 29h1v1h-1z"/>
+    <path fill="#b1182c" d="M41 18h1v1h-1z M41 23h1v1h-1z M41 28h1v1h-1z"/>
+  </g>
+  <g id="LayerMicShadowsLight" inkscape:groupmode="layer" inkscape:label="LayerMicShadowsLight">
+    <path fill="#c6485c" d="M47 16h5v2h-5z M47 18h3v3h-3z M47 21h5v2h-5z M47 23h3v3h-3z M47 26h5v2h-5z M47 28h3v3h-3z M47 31h5v2h-5z"/>
+  </g>
+  <g id="LayerMicShadows" inkscape:groupmode="layer" inkscape:label="LayerMicShadows">
+    <path fill="#a63244" d="M54 16h1v1h-1z M54 21h1v1h-1z M54 26h1v1h-1z M54 31h1v1h-1z"/>
+    <path fill="#a73143" d="M54 17h1v1h-1z M54 22h1v1h-1z M54 27h1v1h-1z M54 32h1v1h-1z"/>
+    <path fill="#aa3650" d="M53 17h1v1h-1z M53 22h1v1h-1z M53 27h1v1h-1z M53 32h1v1h-1z"/>
+    <path fill="#a9374d" d="M52 16h1v1h-1z M52 21h1v1h-1z M52 26h1v1h-1z M52 31h1v1h-1z"/>
+    <path fill="#ac344a" d="M53 16h1v1h-1z M53 21h1v1h-1z M53 26h1v1h-1z M53 31h1v1h-1z"/>
+    <path fill="#ad394f" d="M52 17h1v1h-1z M52 22h1v1h-1z M52 27h1v1h-1z M52 32h1v1h-1z"/>
+  </g>
+</svg>

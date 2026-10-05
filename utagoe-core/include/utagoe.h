@@ -34,12 +34,14 @@ enum class SoundQty  { Quality = 0, Extraction = 1 };
 enum class GpuMode   { Exact = 0, Fastest = 1 };
 
 // By Waveform の処理モデル。V3 は元実装の時間領域の減算。それ以外は参照キャンセルの 5 エンジンと合議 (v3 にない拡張)。
-enum class WaveModel { V3 = 0, Robust = 1, Kalman = 2, Hammerstein = 3, Nmf = 4, Spatial = 5, Ensemble = 6,
-                       Rational = 7, Surface = 8, Trend = 9, Ctf = 10, LowRank = 11, EnsembleLarge = 12, Auto = 13 };
+enum class WaveModel { V3 = 0, Robust = 1, Kalman = 2, Nmf = 4, Spatial = 5, Ensemble = 6,
+                       Surface = 8, LowRank = 11 };
+WaveModel waveModelFromInt(int value);
+int validFft(int value);
 // 代替モデルの位置合わせ。V3Block は元実装の解析と block ごとの drift 探索、Gcc は相互相関による offset + clock drift。
 enum class WaveAlign { V3Block = 0, Gcc = 1, Dense = 2 };
 // 出力するもの (v3 にない拡張)。Vocal は抽出した声。AlignedPair は原曲と、その時間軸に合わせたインストの 2 ファイル。
-enum class OutputKind { Vocal = 0, AlignedPair = 1, CenterSides = 2, Repeats = 3, Upmix = 4 };
+enum class OutputKind { Vocal = 0, AlignedPair = 1 };
 
 constexpr int kSaveDefault = 1;
 constexpr int kSaveAligned = 2;
@@ -91,20 +93,16 @@ struct Settings {
     WaveAlign   waveAlign = WaveAlign::V3Block;
     std::string fitSpans;
     bool        matchBandwidth = false;
-    int         upmixMethod = 3;
-    bool        upmixSevenOne = false;
-    bool        upmixLfe = true;
     bool        normalizeOutput = true;
     bool        matchLowEnd = true;
     bool        removeSubsonic = false;
     int         freqModel = 0;
     int         saveMask = kSaveDefault;
+    int         waveFft = 0;
+    bool        cacheSteps = true;
 
     // 出力するもの。INI では [Output] section の Kind。AlignedPair の位置合わせは waveAlign に従う (処理方式には依らない)。
     OutputKind  outputKind = OutputKind::Vocal;
-    int         centerMethod = 1;
-    int         repeatGuide = 0;
-    int         repeatBreadth = 0;
 
     // 出力先の folder (UI が使う。core の処理には関係しない)。INI では [Output] section の Folder。空なら UI の既定。
     std::string outputFolder;
@@ -240,36 +238,6 @@ bool parseTimeSpans(const std::string& text, std::vector<std::pair<double, doubl
 // AlignedPair の出力 path。出力欄の path の拡張子の前に _main / _inst を付ける。
 void alignedPairPaths(const std::string& output, std::string& mainPath, std::string& instPath);
 void outputPaths(const std::string& output, OutputKind kind, std::string& first, std::string& second);
-ExtractResult extractCenterSides(const AudioBuffer& original, const Settings& settings, ProgressFn progress = nullptr, void* progressUser = nullptr);
-
-struct RepeatClip {
-    std::string name;
-    std::string status;
-    std::string quality;
-    std::string guide;
-    double source = 0, target = 0, duration = 0;
-    double reductionDb = 0, correlation = 0, delayMs = 0, ratePpm = 0;
-    bool joint = false;
-    bool passed = false;
-    AudioBuffer shared;
-    AudioBuffer difference;
-};
-
-struct RepeatsResult {
-    std::vector<RepeatClip> clips;
-    int regions = 0;
-    bool cancelled = false;
-    std::string error;
-
-    explicit operator bool() const { return error.empty() && !cancelled; }
-};
-
-ExtractResult extractUpmix(const AudioBuffer& original, const AudioBuffer* instrumental, const Settings& settings, ProgressFn progress = nullptr,
-                           void* progressUser = nullptr, const AudioInfo* originalInfo = nullptr, const AudioInfo* instrumentalInfo = nullptr);
-
-RepeatsResult extractRepeats(const AudioBuffer& original, const Settings& settings, const std::function<bool(RepeatClip&)>& sink,
-                             ProgressFn progress = nullptr, void* progressUser = nullptr);
-
 // 2 つの path が同じファイルを指すか。元実装は path 文字列の一致で判定するが、ここでは実体で比べる。
 bool sameFile(const std::string& a, const std::string& b);
 

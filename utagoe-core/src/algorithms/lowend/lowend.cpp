@@ -1,4 +1,5 @@
 #include "lowend.h"
+#include "mathconst.h"
 #include "../refcancel/rc.h"
 #include "parallel.h"
 
@@ -11,7 +12,6 @@ namespace lowend {
 namespace {
 
 using cd = std::complex<double>;
-constexpr double kPi = 3.14159265358979323846;
 
 std::size_t pow2At(std::size_t n) {
     std::size_t p = 1;
@@ -78,23 +78,36 @@ std::vector<float> filterInterleaved(const std::vector<float>& x, int channels, 
     for (int j = 0; j < N; ++j) hf[static_cast<std::size_t>(j)] = h[static_cast<std::size_t>(j)];
     rc::fftDouble(hf, false);
     std::vector<float> y(x.size(), 0.0f);
+    const std::size_t blocks = (n + B - 1) / B;
+    const std::size_t wave = static_cast<std::size_t>(std::max(1, workerCount()));
+    std::vector<std::vector<cd>> bufs(std::min(wave, std::max<std::size_t>(1, blocks)), std::vector<cd>(L));
     for (int pair = 0; pair < channels; pair += 2) {
         const int c0 = pair, c1 = std::min(pair + 1, channels - 1);
         const bool two = c1 != c0;
         std::vector<double> acc0(n + L, 0.0), acc1(two ? n + L : 0, 0.0);
-        std::vector<cd> buf(L);
-        for (std::size_t s = 0; s < n; s += B) {
-            std::fill(buf.begin(), buf.end(), cd(0, 0));
-            for (std::size_t j = 0; j < B && s + j < n; ++j) {
-                const std::size_t idx = (s + j) * static_cast<std::size_t>(channels);
-                buf[j] = cd(x[idx + static_cast<std::size_t>(c0)], two ? x[idx + static_cast<std::size_t>(c1)] : 0.0f);
-            }
-            rc::fftDouble(buf, false);
-            for (std::size_t j = 0; j < L; ++j) buf[j] *= hf[j];
-            rc::fftDouble(buf, true);
-            for (std::size_t j = 0; j < L; ++j) {
-                acc0[s + j] += buf[j].real();
-                if (two) acc1[s + j] += buf[j].imag();
+        for (std::size_t first = 0; first < blocks; first += bufs.size()) {
+            const std::size_t count = std::min(bufs.size(), blocks - first);
+            parallelFor(static_cast<long long>(count), 1, [&](long long b, long long e) {
+                for (long long w = b; w < e; ++w) {
+                    std::vector<cd>& buf = bufs[static_cast<std::size_t>(w)];
+                    const std::size_t s = (first + static_cast<std::size_t>(w)) * B;
+                    std::fill(buf.begin(), buf.end(), cd(0, 0));
+                    for (std::size_t j = 0; j < B && s + j < n; ++j) {
+                        const std::size_t idx = (s + j) * static_cast<std::size_t>(channels);
+                        buf[j] = cd(x[idx + static_cast<std::size_t>(c0)], two ? x[idx + static_cast<std::size_t>(c1)] : 0.0f);
+                    }
+                    rc::fftDouble(buf, false);
+                    for (std::size_t j = 0; j < L; ++j) buf[j] *= hf[j];
+                    rc::fftDouble(buf, true);
+                }
+            });
+            for (std::size_t w = 0; w < count; ++w) {
+                const std::vector<cd>& buf = bufs[w];
+                const std::size_t s = (first + w) * B;
+                for (std::size_t j = 0; j < L; ++j) {
+                    acc0[s + j] += buf[j].real();
+                    if (two) acc1[s + j] += buf[j].imag();
+                }
             }
         }
         for (std::size_t i = 0; i < n; ++i) {
@@ -106,22 +119,29 @@ std::vector<float> filterInterleaved(const std::vector<float>& x, int channels, 
     return y;
 }
 
-std::vector<double> crossCorrelateBand(const std::vector<double>& a, const std::vector<double>& b, std::size_t n, int sr, double lo, double hi) {
+void correlatePair(const std::vector<double>& a, const std::vector<double>& b, std::size_t n, int sr, double lo, double hi,
+                   std::vector<double>& plain, std::vector<double>& band) {
     std::vector<cd> fa(n, 0.0), fb(n, 0.0);
     for (std::size_t i = 0; i < a.size() && i < n; ++i) fa[i] = a[i];
     for (std::size_t i = 0; i < b.size() && i < n; ++i) fb[i] = b[i];
     rc::fftDouble(fa, false);
     rc::fftDouble(fb, false);
+    std::vector<cd> p(n), q(n);
     for (std::size_t i = 0; i < n; ++i) {
-        const double f = static_cast<double>(std::min(i, n - i)) * sr / static_cast<double>(n);
         const cd x = std::conj(fa[i]) * fb[i];
+        p[i] = x;
+        const double f = static_cast<double>(std::min(i, n - i)) * sr / static_cast<double>(n);
         const double m = std::abs(x);
-        fa[i] = (f >= lo && f <= hi && m > 1e-30) ? x : cd(0, 0);
+        q[i] = (f >= lo && f <= hi && m > 1e-30) ? x : cd(0, 0);
     }
-    rc::fftDouble(fa, true);
-    std::vector<double> c(n);
-    for (std::size_t i = 0; i < n; ++i) c[i] = fa[i].real();
-    return c;
+    rc::fftDouble(p, true);
+    rc::fftDouble(q, true);
+    plain.resize(n);
+    band.resize(n);
+    for (std::size_t i = 0; i < n; ++i) {
+        plain[i] = p[i].real();
+        band[i] = q[i].real();
+    }
 }
 
 long long coarseLag(const std::vector<double>& mix, const std::vector<double>& inst, int sr) {
@@ -196,35 +216,39 @@ Report match(const std::vector<float>& mixIn, const std::vector<float>& instIn, 
     std::vector<double> lagT, lagV;
 
     const std::size_t xn = pow2At(seg + seg + 2 * R);
-    for (std::size_t s = seg / 2; s + seg + R < nm; s += seg) {
-        if (!tick(0.05 + 0.5 * static_cast<double>(s) / static_cast<double>(nm))) return rep;
+    struct Segment {
+        bool used = false;
+        double lag = 0, lagFrac = 0;
+        std::vector<cd> bins;
+    };
+    std::vector<std::size_t> starts;
+    for (std::size_t s = seg / 2; s + seg + R < nm; s += seg) starts.push_back(s);
+    const std::size_t K1 = static_cast<std::size_t>(K) + 1;
+    auto measure = [&](std::size_t s, Segment& out) {
         const long long w0 = static_cast<long long>(s) - L0 - static_cast<long long>(R);
-        if (w0 < 0 || static_cast<std::size_t>(w0) + seg + 2 * R >= ni) continue;
+        if (w0 < 0 || static_cast<std::size_t>(w0) + seg + 2 * R >= ni) return;
         std::vector<double> a(mm.begin() + static_cast<std::ptrdiff_t>(s), mm.begin() + static_cast<std::ptrdiff_t>(s + seg));
         std::vector<double> b(im.begin() + w0, im.begin() + w0 + static_cast<std::ptrdiff_t>(seg + 2 * R));
         double ea = 0, eb = 0;
         for (double v : a) ea += v * v;
         for (std::size_t i = R; i < R + seg; ++i) eb += b[i] * b[i];
-        if (ea <= 1e-12 || eb <= 1e-12) continue;
-        const std::vector<double> plain = crossCorrelate(a, b, xn);
-        const std::vector<double> c = crossCorrelateBand(a, b, xn, sr, 150.0, 8000.0);
+        if (ea <= 1e-12 || eb <= 1e-12) return;
+        std::vector<double> plain, c;
+        correlatePair(a, b, xn, sr, 150.0, 8000.0, plain, c);
         std::size_t k = 1;
         for (std::size_t q = 1; q < 2 * R; ++q)
             if (c[q] > c[k]) k = q;
         double score = 0;
         for (std::size_t q = k - 1; q <= k + 1; ++q) score = std::max(score, plain[q]);
         score /= std::sqrt(ea * eb);
-        if (score < 0.3) continue;
+        if (score < 0.3) return;
         const double y0 = c[k - 1], y1 = c[k], y2 = c[k + 1];
         const double den = y0 - 2 * y1 + y2;
         const double frac = std::abs(den) > 1e-30 ? std::clamp(0.5 * (y0 - y2) / den, -0.5, 0.5) : 0.0;
-        const double lag = static_cast<double>(L0) + static_cast<double>(R) - (static_cast<double>(k) + frac);
-        lagT.push_back(static_cast<double>(s + seg / 2));
-        lagV.push_back(lag);
-        const long long lagInt = static_cast<long long>(std::floor(lag));
-        const double lagFrac = lag - static_cast<double>(lagInt);
-        ++rep.segments;
-
+        out.used = true;
+        out.lag = static_cast<double>(L0) + static_cast<double>(R) - (static_cast<double>(k) + frac);
+        const long long lagInt = static_cast<long long>(std::floor(out.lag));
+        out.lagFrac = out.lag - static_cast<double>(lagInt);
         std::vector<cd> fm(static_cast<std::size_t>(N)), fi(static_cast<std::size_t>(N));
         for (std::size_t j0 = s; j0 + static_cast<std::size_t>(N) <= s + seg; j0 += static_cast<std::size_t>(N / 2)) {
             const long long i0 = static_cast<long long>(j0) - lagInt;
@@ -236,10 +260,32 @@ Report match(const std::vector<float>& mixIn, const std::vector<float>& instIn, 
                 }
                 rc::fftDouble(fm, false);
                 rc::fftDouble(fi, false);
+                out.bins.insert(out.bins.end(), fm.begin(), fm.begin() + static_cast<std::ptrdiff_t>(K1));
+                out.bins.insert(out.bins.end(), fi.begin(), fi.begin() + static_cast<std::ptrdiff_t>(K1));
+            }
+        }
+    };
+    const std::size_t wave = static_cast<std::size_t>(std::max(1, workerCount())) * 4;
+    for (std::size_t first = 0; first < starts.size(); first += wave) {
+        if (!tick(0.05 + 0.5 * static_cast<double>(starts[first]) / static_cast<double>(nm))) return rep;
+        const std::size_t count = std::min(wave, starts.size() - first);
+        std::vector<Segment> segs(count);
+        parallelFor(static_cast<long long>(count), 1, [&](long long b, long long e) {
+            for (long long i = b; i < e; ++i) measure(starts[first + static_cast<std::size_t>(i)], segs[static_cast<std::size_t>(i)]);
+        });
+        for (std::size_t i = 0; i < count; ++i) {
+            const Segment& g = segs[i];
+            if (!g.used) continue;
+            lagT.push_back(static_cast<double>(starts[first + i] + seg / 2));
+            lagV.push_back(g.lag);
+            ++rep.segments;
+            for (std::size_t off = 0; off < g.bins.size(); off += 2 * K1) {
+                const cd* fm = g.bins.data() + off;
+                const cd* fi = fm + K1;
                 for (int q = 0; q <= K; ++q) {
                     const double w = 2.0 * kPi * q / N;
-                    const cd M = fm[static_cast<std::size_t>(q)], I = fi[static_cast<std::size_t>(q)];
-                    sio[static_cast<std::size_t>(q)] += M * std::conj(I) * std::polar(1.0, w * lagFrac);
+                    const cd M = fm[q], I = fi[q];
+                    sio[static_cast<std::size_t>(q)] += M * std::conj(I) * std::polar(1.0, w * g.lagFrac);
                     sii[static_cast<std::size_t>(q)] += std::norm(I);
                     soo[static_cast<std::size_t>(q)] += std::norm(M);
                 }

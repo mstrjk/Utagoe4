@@ -4,6 +4,7 @@
 // ソフトウェア描画 (WARP / Microsoft Basic Render Driver) は CPU と変わらないので使わない。
 
 #include "gpu.h"
+#include "mathconst.h"
 
 #if defined(_WIN32)
 
@@ -20,7 +21,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <map>
+#include <memory>
 #include <mutex>
+#include <string>
 
 namespace utagoe {
 namespace gpu {
@@ -283,6 +288,283 @@ void main(uint3 id : SV_DispatchThreadID) {
 )";
 
 
+
+const char* kDoubleHeader = R"(
+cbuffer P : register(b0) {
+    uint count; uint m; uint logm; uint rowThreads;
+    uint len; uint n; uint half_; uint lags;
+    int lagStart; uint bigN; uint stageHalf; uint twOffset;
+    uint scaleLo; uint scaleHi; uint pad0; uint pad1;
+};
+)";
+
+const char* kDPreHlsl = R"(
+StructuredBuffer<double> X : register(t0);
+StructuredBuffer<double2> CH : register(t1);
+RWStructuredBuffer<double2> A : register(u0);
+[numthreads(256, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint tid = id.y * rowThreads + id.x;
+    if (tid >= count * m) return;
+    uint v = tid / m, j = tid - v * m;
+    precise double2 r = double2(0, 0);
+    if (j < min(n, len)) {
+        double x = X[v * len + j];
+        double2 c = CH[j];
+        precise double re = c.x * x;
+        precise double im = c.y * x;
+        r = double2(re, im);
+    }
+    A[v * m + (reversebits(j) >> (32 - logm))] = r;
+}
+)";
+
+const char* kDStageHlsl = R"(
+StructuredBuffer<double2> TW : register(t0);
+RWStructuredBuffer<double2> A : register(u0);
+[numthreads(256, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint tid = id.y * rowThreads + id.x;
+    uint hm = m >> 1;
+    if (tid >= count * hm) return;
+    uint v = tid / hm, r = tid - v * hm;
+    uint blk = r / stageHalf, k = r - blk * stageHalf;
+    uint base = v * m + blk * stageHalf * 2;
+    double2 u = A[base + k];
+    double2 a = A[base + k + stageHalf];
+    double2 w = TW[twOffset + k];
+    precise double p0 = a.x * w.x;
+    precise double p1 = a.y * w.y;
+    precise double p2 = a.x * w.y;
+    precise double p3 = a.y * w.x;
+    precise double vr = p0 - p1;
+    precise double vi = p2 + p3;
+    precise double o0 = u.x + vr;
+    precise double o1 = u.y + vi;
+    precise double o2 = u.x - vr;
+    precise double o3 = u.y - vi;
+    A[base + k] = double2(o0, o1);
+    A[base + k + stageHalf] = double2(o2, o3);
+}
+)";
+
+const char* kDLocalHlsl = R"(
+StructuredBuffer<double2> TW : register(t0);
+RWStructuredBuffer<double2> A : register(u0);
+groupshared double2 sh[1024];
+[numthreads(512, 1, 1)]
+void main(uint3 gid : SV_GroupID, uint3 tid3 : SV_GroupThreadID) {
+    uint g = gid.y * (rowThreads / 512) + gid.x;
+    uint blocksPer = m / 1024;
+    if (g >= count * blocksPer) return;
+    uint t = tid3.x;
+    uint base = (g / blocksPer) * m + (g % blocksPer) * 1024;
+    sh[t] = A[base + t];
+    sh[t + 512] = A[base + t + 512];
+    GroupMemoryBarrierWithGroupSync();
+    for (uint h = 1; h <= 512; h <<= 1) {
+        uint k = t & (h - 1);
+        uint i0 = (t / h) * (h * 2) + k;
+        double2 u = sh[i0];
+        double2 a = sh[i0 + h];
+        double2 w = TW[h - 1 + k];
+        precise double p0 = a.x * w.x;
+        precise double p1 = a.y * w.y;
+        precise double p2 = a.x * w.y;
+        precise double p3 = a.y * w.x;
+        precise double vr = p0 - p1;
+        precise double vi = p2 + p3;
+        precise double o0 = u.x + vr;
+        precise double o1 = u.y + vi;
+        precise double o2 = u.x - vr;
+        precise double o3 = u.y - vi;
+        sh[i0] = double2(o0, o1);
+        sh[i0 + h] = double2(o2, o3);
+        GroupMemoryBarrierWithGroupSync();
+    }
+    A[base + t] = sh[t];
+    A[base + t + 512] = sh[t + 512];
+}
+)";
+
+const char* kDPairHlsl = R"(
+StructuredBuffer<double2> TW : register(t0);
+RWStructuredBuffer<double2> A : register(u0);
+double2 bfly(double2 a, double2 w) {
+    precise double p0 = a.x * w.x;
+    precise double p1 = a.y * w.y;
+    precise double p2 = a.x * w.y;
+    precise double p3 = a.y * w.x;
+    precise double vr = p0 - p1;
+    precise double vi = p2 + p3;
+    return double2(vr, vi);
+}
+[numthreads(256, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint tid = id.y * rowThreads + id.x;
+    uint qm = m >> 2;
+    if (tid >= count * qm) return;
+    uint v = tid / qm, r = tid - v * qm;
+    uint h = stageHalf;
+    uint blk = r / h, k = r - blk * h;
+    uint e0 = v * m + blk * h * 4 + k, e1 = e0 + h, e2 = e0 + 2 * h, e3 = e0 + 3 * h;
+    double2 x0 = A[e0], x1 = A[e1], x2 = A[e2], x3 = A[e3];
+    double2 w1 = TW[h - 1 + k];
+    double2 t1 = bfly(x1, w1);
+    double2 t3 = bfly(x3, w1);
+    precise double a0r = x0.x + t1.x;
+    precise double a0i = x0.y + t1.y;
+    precise double a1r = x0.x - t1.x;
+    precise double a1i = x0.y - t1.y;
+    precise double a2r = x2.x + t3.x;
+    precise double a2i = x2.y + t3.y;
+    precise double a3r = x2.x - t3.x;
+    precise double a3i = x2.y - t3.y;
+    double2 wa = TW[2 * h - 1 + k];
+    double2 wb = TW[2 * h - 1 + k + h];
+    double2 s2 = bfly(double2(a2r, a2i), wa);
+    double2 s3 = bfly(double2(a3r, a3i), wb);
+    precise double b0r = a0r + s2.x;
+    precise double b0i = a0i + s2.y;
+    precise double b2r = a0r - s2.x;
+    precise double b2i = a0i - s2.y;
+    precise double b1r = a1r + s3.x;
+    precise double b1i = a1i + s3.y;
+    precise double b3r = a1r - s3.x;
+    precise double b3i = a1i - s3.y;
+    A[e0] = double2(b0r, b0i);
+    A[e1] = double2(b1r, b1i);
+    A[e2] = double2(b2r, b2i);
+    A[e3] = double2(b3r, b3i);
+}
+)";
+
+const char* kDScaleHlsl = R"(
+RWStructuredBuffer<double2> A : register(u0);
+[numthreads(256, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint tid = id.y * rowThreads + id.x;
+    if (tid >= count * m) return;
+    double s = asdouble(scaleLo, scaleHi);
+    double2 a = A[tid];
+    precise double re = a.x * s;
+    precise double im = a.y * s;
+    A[tid] = double2(re, im);
+}
+)";
+
+const char* kDKernelHlsl = R"(
+StructuredBuffer<double2> K : register(t0);
+RWStructuredBuffer<double2> A : register(u0);
+[numthreads(256, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint tid = id.y * rowThreads + id.x;
+    if (tid >= count * m) return;
+    uint v = tid / m, j = tid - v * m;
+    double2 a = A[tid];
+    double2 b = K[j];
+    precise double p0 = a.x * b.x;
+    precise double p1 = a.y * b.y;
+    precise double p2 = a.x * b.y;
+    precise double p3 = a.y * b.x;
+    precise double re = p0 - p1;
+    precise double im = p2 + p3;
+    A[tid] = double2(re, im);
+}
+)";
+
+const char* kDBitrevHlsl = R"(
+RWStructuredBuffer<double2> A : register(u0);
+[numthreads(256, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint tid = id.y * rowThreads + id.x;
+    if (tid >= count * m) return;
+    uint v = tid / m, i = tid - v * m;
+    uint j = reversebits(i) >> (32 - logm);
+    if (i < j) {
+        double2 t = A[v * m + i];
+        A[v * m + i] = A[v * m + j];
+        A[v * m + j] = t;
+    }
+}
+)";
+
+const char* kDPostHlsl = R"(
+StructuredBuffer<double2> A : register(t0);
+StructuredBuffer<double2> CH : register(t1);
+RWStructuredBuffer<double2> O : register(u0);
+[numthreads(256, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint tid = id.y * rowThreads + id.x;
+    if (tid >= count * half_) return;
+    uint v = tid / half_, k = tid - v * half_;
+    double s = asdouble(scaleLo, scaleHi);
+    double2 a = A[v * m + k];
+    precise double ar = a.x * s;
+    precise double ai = a.y * s;
+    double2 c = CH[k];
+    precise double p0 = ar * c.x;
+    precise double p1 = ai * c.y;
+    precise double p2 = ar * c.y;
+    precise double p3 = ai * c.x;
+    precise double re = p0 - p1;
+    precise double im = p2 + p3;
+    O[tid] = double2(re, im);
+}
+)";
+
+const char* kDCrossHlsl = R"(
+StructuredBuffer<double2> S : register(t0);
+RWStructuredBuffer<double2> C : register(u0);
+[numthreads(256, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint tid = id.y * rowThreads + id.x;
+    if (tid >= count * half_) return;
+    uint i = tid / half_, k = tid - i * half_;
+    double2 y = S[(2 * i) * half_ + k];
+    double2 x = S[(2 * i + 1) * half_ + k];
+    double nxi = -x.y;
+    precise double p0 = y.x * x.x;
+    precise double p1 = y.y * nxi;
+    precise double p2 = y.x * nxi;
+    precise double p3 = y.y * x.x;
+    precise double re = p0 - p1;
+    precise double im = p2 + p3;
+    C[tid] = double2(re, im);
+}
+)";
+
+const char* kDScanHlsl = R"(
+StructuredBuffer<double2> C : register(t0);
+StructuredBuffer<double2> LT : register(t1);
+RWStructuredBuffer<double> ACC : register(u0);
+RWStructuredBuffer<double> C0 : register(u1);
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint tid = id.y * rowThreads + id.x;
+    if (tid >= count * lags) return;
+    uint i = tid / lags, li = tid - i * lags;
+    int ml = lagStart + (int)li;
+    int N = (int)bigN;
+    uint step = (uint)(((ml % N) + N) % N);
+    uint idx = 0;
+    precise double acc = 0;
+    uint base = i * half_;
+    if (li == 0) C0[i] = C[base].x;
+    for (uint k = 1; k < half_; ++k) {
+        idx += step;
+        if (idx >= bigN) idx -= bigN;
+        double2 e = LT[idx];
+        double2 c = C[base + k];
+        precise double p0 = c.x * e.x;
+        precise double p1 = c.y * e.y;
+        precise double t = p0 - p1;
+        acc = acc + t;
+    }
+    ACC[tid] = acc;
+}
+)";
+
 template <class T>
 struct Ref {
     T* p = nullptr;
@@ -446,6 +728,11 @@ public:
     ID3D11DeviceContext* ctx() const { return ctx_.p; }
 
     Ref<ID3D11ComputeShader> search, level, window, fft, gateFreq, gateCntr, terms, fir;
+    Ref<ID3D11ComputeShader> dPre, dStage, dKernel, dBitrev, dPost, dCross, dScan, dLocal, dPair, dScale;
+    std::map<std::pair<int, bool>, std::unique_ptr<Buffer>> dTables;
+    bool doubles = false;
+    Buffer dX, dChirp, dK, dTwF, dTwI, dLagTw, dA, dS, dC, dAcc, dC0;
+    int dN = 0, dM = 0, dBigN = 0;
 
     Buffer blockO, blockI, cand, part, gains;
     Buffer lineA, lineB, win, thr, lv, specA, specB, tmp, tw, termA, termB;
@@ -522,6 +809,24 @@ private:
 
         st.adapter = narrow(bestDesc.Description);
         st.available = true;
+
+        D3D11_FEATURE_DATA_DOUBLES dd{};
+        if (SUCCEEDED(dev_->CheckFeatureSupport(D3D11_FEATURE_DOUBLES, &dd, sizeof dd)) && dd.DoublePrecisionFloatShaderOps) {
+            const std::string head = kDoubleHeader;
+            doubles = buildQuiet(head + kDPreHlsl, dPre) && buildQuiet(head + kDStageHlsl, dStage) &&
+                      buildQuiet(head + kDKernelHlsl, dKernel) && buildQuiet(head + kDBitrevHlsl, dBitrev) &&
+                      buildQuiet(head + kDPostHlsl, dPost) && buildQuiet(head + kDCrossHlsl, dCross) &&
+                      buildQuiet(head + kDScanHlsl, dScan) && buildQuiet(head + kDLocalHlsl, dLocal) &&
+                      buildQuiet(head + kDPairHlsl, dPair) && buildQuiet(head + kDScaleHlsl, dScale);
+        }
+    }
+
+    bool buildQuiet(const std::string& src, Ref<ID3D11ComputeShader>& cs) {
+        Ref<ID3DBlob> code, err;
+        HRESULT hr = compile_(src.data(), src.size(), "utagoe", nullptr, nullptr, "main", "cs_5_0",
+                              D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_IEEE_STRICTNESS, 0, code.out(), err.out());
+        if (FAILED(hr)) return false;
+        return SUCCEEDED(dev_->CreateComputeShader(code->GetBufferPointer(), code->GetBufferSize(), nullptr, cs.out()));
     }
 
     bool build(const char* src, Ref<ID3D11ComputeShader>& cs) {
@@ -564,7 +869,7 @@ Buffer* fftRun(Device& d, Buffer& a, Buffer& tmp, int n, int batch, bool inverse
     if (d.twN != n) {
         std::vector<float> t(static_cast<std::size_t>(n));
         for (int k = 0; k < n / 2; ++k) {
-            const double ang = -2.0 * 3.14159265358979323846 * k / n;
+            const double ang = -2.0 * kPi * k / n;
             t[static_cast<std::size_t>(2 * k)] = static_cast<float>(std::cos(ang));
             t[static_cast<std::size_t>(2 * k + 1)] = static_cast<float>(std::sin(ang));
         }
@@ -763,6 +1068,165 @@ bool centralizeFrames(const float* lineL, const float* lineR, int frames, int n,
     return termsOut(d, *rb, frames, n, overlap, termsR);
 }
 
+namespace {
+std::atomic<bool> g_allowed{true};
+
+struct DParams {
+    UINT count, m, logm, rowThreads;
+    UINT len, n, half, lags;
+    INT lagStart;
+    UINT bigN, stageHalf, twOffset;
+    UINT scaleLo, scaleHi, pad0, pad1;
+};
+
+bool dDispatch(Device& d, DParams p, unsigned long long threads, ID3D11ComputeShader* cs,
+               std::initializer_list<Buffer*> srvs, std::initializer_list<Buffer*> uavs, UINT groupSize = 256) {
+    const unsigned long long groups = (threads + groupSize - 1) / groupSize;
+    UINT gx = static_cast<UINT>(std::min<unsigned long long>(groups, 32768));
+    UINT gy = static_cast<UINT>((groups + gx - 1) / gx);
+    if (gx == 0) gx = 1;
+    if (gy == 0) gy = 1;
+    p.rowThreads = gx * groupSize;
+    if (!d.constants(&p, sizeof p)) return false;
+    d.run(cs, srvs, uavs, gx, gy);
+    return true;
+}
+
+bool dFft(Device& d, DParams p, Buffer& twTable) {
+    UINT h = 1;
+    if (p.m >= 1024) {
+        const unsigned long long groups = static_cast<unsigned long long>(p.count) * (p.m / 1024);
+        UINT gx = static_cast<UINT>(std::min<unsigned long long>(groups, 32768));
+        UINT gy = static_cast<UINT>((groups + gx - 1) / gx);
+        p.rowThreads = gx * 512;
+        if (!d.constants(&p, sizeof p)) return false;
+        d.run(d.dLocal.p, {&twTable}, {&d.dA}, gx, gy);
+        h = 1024;
+    }
+    for (; h * 2 < p.m; h <<= 2) {
+        p.stageHalf = h;
+        if (!dDispatch(d, p, static_cast<unsigned long long>(p.count) * (p.m / 4), d.dPair.p, {&twTable}, {&d.dA})) return false;
+    }
+    for (; h < p.m; h <<= 1) {
+        p.stageHalf = h;
+        p.twOffset = h - 1;
+        if (!dDispatch(d, p, static_cast<unsigned long long>(p.count) * (p.m / 2), d.dStage.p, {&twTable}, {&d.dA})) return false;
+    }
+    return true;
+}
+}
+
+void allow(bool on) { g_allowed = on; }
+
+bool fftBatch(std::complex<double>* const* arrays, int count, int n, bool inverse,
+              const std::complex<double>* table) {
+    if (!g_allowed || count <= 0) return false;
+    Device& d = device();
+    std::lock_guard<std::mutex> lk(d.mutex);
+    if (!d.ok() || !d.doubles) return false;
+    const UINT logn = log2u(static_cast<unsigned>(n));
+    if (n < 2 || (1u << logn) != static_cast<unsigned>(n)) return false;
+    auto& slot = d.dTables[{n, inverse}];
+    if (!slot) {
+        auto b = std::make_unique<Buffer>();
+        if (!d.upload(*b, table, static_cast<UINT>(n - 1) * 16, 16)) return false;
+        slot = std::move(b);
+    }
+    const std::size_t bytesEach = static_cast<std::size_t>(n) * 16;
+    const std::size_t perBatch = std::max<std::size_t>(1, (std::size_t(192) << 20) / bytesEach);
+    std::vector<std::complex<double>> host;
+    const double inv = 1.0 / static_cast<double>(n);
+    DParams p{};
+    p.m = static_cast<UINT>(n);
+    p.logm = logn;
+    std::memcpy(&p.scaleLo, &inv, 4);
+    std::memcpy(&p.scaleHi, reinterpret_cast<const char*>(&inv) + 4, 4);
+    for (int b = 0; b < count; b += static_cast<int>(perBatch)) {
+        const int cnt = std::min(static_cast<int>(perBatch), count - b);
+        host.resize(static_cast<std::size_t>(cnt) * n);
+        for (int i = 0; i < cnt; ++i) std::memcpy(host.data() + static_cast<std::size_t>(i) * n, arrays[b + i], bytesEach);
+        if (!d.upload(d.dA, host.data(), static_cast<UINT>(host.size() * 16), 16, true)) return false;
+        p.count = static_cast<UINT>(cnt);
+        const unsigned long long all = static_cast<unsigned long long>(cnt) * n;
+        if (!dDispatch(d, p, all, d.dBitrev.p, {}, {&d.dA})) return false;
+        if (!dFft(d, p, *slot)) return false;
+        if (inverse && !dDispatch(d, p, all, d.dScale.p, {}, {&d.dA})) return false;
+        if (!d.download(d.dA, host.data(), static_cast<UINT>(host.size() * 16))) return false;
+        for (int i = 0; i < cnt; ++i) std::memcpy(arrays[b + i], host.data() + static_cast<std::size_t>(i) * n, bytesEach);
+    }
+    return true;
+}
+bool allowed() { return g_allowed; }
+
+bool anchorScan(const AnchorSetup& s, const std::vector<const double*>& ys, const std::vector<const double*>& xs,
+                std::vector<double>& acc, std::vector<double>& c0) {
+    if (!g_allowed) return false;
+    Device& d = device();
+    std::lock_guard<std::mutex> lk(d.mutex);
+    if (!d.ok() || !d.doubles || ys.size() != xs.size() || ys.empty()) return false;
+    const UINT logm = log2u(static_cast<unsigned>(s.m));
+    if ((1u << logm) != static_cast<unsigned>(s.m)) return false;
+    if (d.dN != s.n || d.dM != s.m || d.dBigN != s.bigN) {
+        if (!d.upload(d.dChirp, s.chirp, static_cast<UINT>(s.n) * 16, 16)) return false;
+        if (!d.upload(d.dK, s.kernel, static_cast<UINT>(s.m) * 16, 16)) return false;
+        if (!d.upload(d.dTwF, s.twForward, static_cast<UINT>(s.m - 1) * 16, 16)) return false;
+        if (!d.upload(d.dTwI, s.twInverse, static_cast<UINT>(s.m - 1) * 16, 16)) return false;
+        if (!d.upload(d.dLagTw, s.lagTwiddle, static_cast<UINT>(s.bigN) * 16, 16)) return false;
+        d.dN = s.n;
+        d.dM = s.m;
+        d.dBigN = s.bigN;
+    }
+    const std::size_t anchors = ys.size();
+    acc.assign(anchors * static_cast<std::size_t>(s.lags), 0.0);
+    c0.assign(anchors, 0.0);
+    const std::size_t perBatch = std::max<std::size_t>(1, (std::size_t(192) << 20) / (2 * static_cast<std::size_t>(s.m) * 16));
+    std::vector<double> x;
+    const double inv = 1.0 / static_cast<double>(s.m);
+    UINT lo, hi;
+    std::memcpy(&lo, &inv, 4);
+    std::memcpy(&hi, reinterpret_cast<const char*>(&inv) + 4, 4);
+    for (std::size_t b = 0; b < anchors; b += perBatch) {
+        const std::size_t cnt = std::min(perBatch, anchors - b);
+        const UINT vecs = static_cast<UINT>(cnt * 2);
+        x.resize(static_cast<std::size_t>(vecs) * static_cast<std::size_t>(s.len));
+        for (std::size_t i = 0; i < cnt; ++i) {
+            std::memcpy(x.data() + (2 * i) * s.len, ys[b + i], static_cast<std::size_t>(s.len) * 8);
+            std::memcpy(x.data() + (2 * i + 1) * s.len, xs[b + i], static_cast<std::size_t>(s.len) * 8);
+        }
+        if (!d.upload(d.dX, x.data(), static_cast<UINT>(x.size() * 8), 8)) return false;
+        if (!d.ensure(d.dA, vecs * static_cast<UINT>(s.m) * 16, 16, true, true)) return false;
+        if (!d.ensure(d.dS, vecs * static_cast<UINT>(s.half) * 16, 16, true, true)) return false;
+        if (!d.ensure(d.dC, static_cast<UINT>(cnt) * static_cast<UINT>(s.half) * 16, 16, true, true)) return false;
+        if (!d.ensure(d.dAcc, static_cast<UINT>(cnt) * static_cast<UINT>(s.lags) * 8, 8, true, true)) return false;
+        if (!d.ensure(d.dC0, static_cast<UINT>(cnt) * 8, 8, true, true)) return false;
+        DParams p{};
+        p.count = vecs;
+        p.m = static_cast<UINT>(s.m);
+        p.logm = logm;
+        p.len = static_cast<UINT>(s.len);
+        p.n = static_cast<UINT>(s.n);
+        p.half = static_cast<UINT>(s.half);
+        p.lags = static_cast<UINT>(s.lags);
+        p.lagStart = s.lagStart;
+        p.bigN = static_cast<UINT>(s.bigN);
+        p.scaleLo = lo;
+        p.scaleHi = hi;
+        const unsigned long long all = static_cast<unsigned long long>(vecs) * s.m;
+        if (!dDispatch(d, p, all, d.dPre.p, {&d.dX, &d.dChirp}, {&d.dA})) return false;
+        if (!dFft(d, p, d.dTwF)) return false;
+        if (!dDispatch(d, p, all, d.dKernel.p, {&d.dK}, {&d.dA})) return false;
+        if (!dDispatch(d, p, all, d.dBitrev.p, {}, {&d.dA})) return false;
+        if (!dFft(d, p, d.dTwI)) return false;
+        if (!dDispatch(d, p, static_cast<unsigned long long>(vecs) * s.half, d.dPost.p, {&d.dA, &d.dChirp}, {&d.dS})) return false;
+        p.count = static_cast<UINT>(cnt);
+        if (!dDispatch(d, p, static_cast<unsigned long long>(cnt) * s.half, d.dCross.p, {&d.dS}, {&d.dC})) return false;
+        if (!dDispatch(d, p, static_cast<unsigned long long>(cnt) * s.lags, d.dScan.p, {&d.dC, &d.dLagTw}, {&d.dAcc, &d.dC0}, 64)) return false;
+        if (!d.download(d.dAcc, acc.data() + b * static_cast<std::size_t>(s.lags), static_cast<UINT>(cnt * s.lags * 8))) return false;
+        if (!d.download(d.dC0, c0.data() + b, static_cast<UINT>(cnt * 8))) return false;
+    }
+    return true;
+}
+
 bool firConvolve(const float* x, int count, const float* h, int taps, float* out) {
     Device& d = device();
     std::lock_guard<std::mutex> lk(d.mutex);
@@ -799,6 +1263,11 @@ bool freqFrames(const float*, const float*, int, int, int, int, int, float, cons
 bool centralizeFrames(const float*, const float*, int, int, int, int, float, float, const float*, const float*,
                       float*, float*) { return false; }
 bool firConvolve(const float*, int, const float*, int, float*) { return false; }
+void allow(bool) {}
+bool fftBatch(std::complex<double>* const*, int, int, bool, const std::complex<double>*) { return false; }
+bool allowed() { return false; }
+bool anchorScan(const AnchorSetup&, const std::vector<const double*>&, const std::vector<const double*>&,
+                std::vector<double>&, std::vector<double>&) { return false; }
 
 }
 }

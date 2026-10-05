@@ -5,47 +5,35 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Utagoe.App;
+using Utagoe.Ui;
 using Utagoe.Native;
 
 namespace Utagoe.Forms;
 
 internal sealed class TerminalForm : XpTerminalWindow
 {
-    private static TerminalForm? s_open;
+    private static readonly WindowSlot<TerminalForm> Slot = new();
 
-    /// 開いている terminal (別 window でも main window の中でも)。無ければ null。
-    public static TerminalForm? Current => s_open is { IsDisposed: false } ? s_open : null;
+    public static TerminalForm? Current => Slot.Current;
 
-    /// 開いていればそれを、無ければ表示せずに作って返す。main window に組み込むときに使う。
-    public static TerminalForm Create(Form owner)
+    public static TerminalForm Create(Form owner) => Current ?? Slot.Hold(New(owner));
+
+    public static TerminalForm Docked() => new();
+
+    public static void ShowFor(Form owner) => Slot.Show(owner, () => New(owner));
+
+    private static TerminalForm New(Form owner) => new() { Owner = owner, StartPosition = FormStartPosition.CenterParent };
+
+    private TerminalForm() : base(Template(() => L.T("Utagoe Terminal"), Placement.CenterParent))
     {
-        if (Current is { } t) return t;
-        return s_open = new TerminalForm { Owner = owner, StartPosition = FormStartPosition.CenterParent };
-    }
-
-    public static void ShowFor(Form owner)
-    {
-        if (s_open is { IsDisposed: false })
-        {
-            if (s_open.WindowState == FormWindowState.Minimized) s_open.WindowState = FormWindowState.Normal;
-            s_open.Activate();
-            return;
-        }
-        s_open = new TerminalForm { Owner = owner, StartPosition = FormStartPosition.CenterParent };
-        s_open.Show(owner);
-    }
-
-    private TerminalForm()
-    {
-        Text = "Utagoe Terminal";
         Heading = "Utagoe Terminal";
         Subheading = "Type 'help' for commands.";
         Terminal.Command += Run;
-        FormClosed += (_, _) => s_open = null;
     }
 
     protected override string FooterText() =>
-        $"Utagoe {Program.Version}  |  {CoreVersion()}  |  log: {(LogHub.LogFile is { } f ? "logs\\" + Path.GetFileName(f) : "(not written)")}  (type 'logs' to open the folder)";
+        $"Utagoe {Program.Version}  |  {CoreVersion()}  |  " +
+        L.F("log: {0}  (type 'logs' to open the folder)", LogHub.LogFile is { } f ? "logs\\" + Path.GetFileName(f) : L.T("(not written)"));
 
     private static string CoreVersion()
     {

@@ -2,9 +2,14 @@
 // STFT は平方根 Hann 窓、逆変換は窓の二乗和で正規化する。gaussian は scipy.ndimage.gaussian_filter1d と同じ係数と端の扱い。
 
 #include "rc.h"
+#include "gpu.h"
+#include "mathconst.h"
 #include "parallel.h"
 #include "fft.h"
 
+#include <mutex>
+#include <memory>
+#include <map>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -13,7 +18,6 @@ namespace utagoe {
 namespace rc {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 // gaussian_filter1d の係数。半径は int(4 sigma + 0.5)。
 std::vector<double> gaussianKernel(double sigma) {
@@ -226,6 +230,45 @@ double besselI0(double x) {
     return sum;
 }
 
+namespace {
+
+const std::vector<cd>& doubleTwiddles(std::size_t n, bool inverse) {
+    static std::mutex lock;
+    static std::map<std::pair<std::size_t, bool>, std::unique_ptr<std::vector<cd>>> tables;
+    std::lock_guard<std::mutex> g(lock);
+    auto& slot = tables[{n, inverse}];
+    if (!slot) {
+        auto t = std::make_unique<std::vector<cd>>();
+        t->reserve(n);
+        for (std::size_t len = 2; len <= n; len <<= 1) {
+            const double ang = (inverse ? 2.0 : -2.0) * kPi / static_cast<double>(len);
+            for (std::size_t k = 0; k < len / 2; ++k) t->push_back(std::polar(1.0, ang * static_cast<double>(k)));
+        }
+        slot = std::move(t);
+    }
+    return *slot;
+}
+
+}
+
+const std::vector<cd>& fftTwiddles(std::size_t n, bool inverse) { return doubleTwiddles(n, inverse); }
+
+void fftDoubleMany(const std::vector<std::vector<cd>*>& arrays, bool inverse) {
+    std::map<std::size_t, std::vector<std::vector<cd>*>> bySize;
+    for (std::vector<cd>* a : arrays)
+        if (a && !a->empty()) bySize[a->size()].push_back(a);
+    for (auto& [n, group] : bySize) {
+        std::vector<cd*> ptrs;
+        for (std::vector<cd>* a : group) ptrs.push_back(a->data());
+        if (n >= 2 && (n & (n - 1)) == 0 &&
+            gpu::fftBatch(ptrs.data(), static_cast<int>(ptrs.size()), static_cast<int>(n), inverse, doubleTwiddles(n, inverse).data()))
+            continue;
+        parallelFor(static_cast<long long>(group.size()), 1, [&](long long b, long long e) {
+            for (long long i = b; i < e; ++i) fftDouble(*group[static_cast<std::size_t>(i)], inverse);
+        });
+    }
+}
+
 void fftDouble(std::vector<cd>& a, bool inverse) {
     const std::size_t n = a.size();
     for (std::size_t i = 1, j = 0; i < n; ++i) {
@@ -234,11 +277,12 @@ void fftDouble(std::vector<cd>& a, bool inverse) {
         j ^= bit;
         if (i < j) std::swap(a[i], a[j]);
     }
+    const std::vector<cd>& table = doubleTwiddles(n, inverse);
+    std::size_t offset = 0;
     for (std::size_t len = 2; len <= n; len <<= 1) {
-        const double ang = (inverse ? 2.0 : -2.0) * kPi / static_cast<double>(len);
         const std::size_t halfLen = len / 2;
-        std::vector<cd> tw(halfLen);
-        for (std::size_t k = 0; k < halfLen; ++k) tw[k] = std::polar(1.0, ang * static_cast<double>(k));
+        const cd* tw = table.data() + offset;
+        offset += halfLen;
         parallelFor(static_cast<long long>(n / len), std::max<long long>(1, 16384 / static_cast<long long>(len)),
                     [&](long long b, long long e) {
             for (long long blk = b; blk < e; ++blk) {

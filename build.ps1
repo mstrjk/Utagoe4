@@ -5,6 +5,8 @@
 #   dist\Utagoe.exe                                    配布用の 1 file。初回起動で %LOCALAPPDATA%\Utagoe\ に導入される
 #   utagoe-ui\bin\Release\net10.0-windows\win-x64\     開発用。lib\ を横に置いてその場で動く
 
+param([switch]$Release)
+
 $ErrorActionPreference = 'Stop'
 $root  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $core  = Join-Path $root 'utagoe-core'
@@ -28,6 +30,13 @@ Invoke-Native 'CMake configure' { cmake -S $core -B $build -G Ninja -DCMAKE_BUIL
 
 Write-Host 'core: build (utagoe_core.dll, codec DLLs, utagoe.exe, tests)'
 Invoke-Native 'core build' { cmake --build $build }
+if (-not $Release) {
+    $signed = @(Get-ChildItem $build -Filter '*.dll' | Where-Object { (Get-AuthenticodeSignature $_.FullName).Status -ne 'NotSigned' })
+    if ($signed.Count -gt 0) {
+        $signed | Remove-Item -Force
+        Invoke-Native 'core relink (unsigned)' { cmake --build $build }
+    }
+}
 
 # テストは DLL 版を PowerShell から読み込んで実行する。未署名 exe を止める環境 (Smart App Control など) でも動く。
 # 同梱ライブラリの DLL は utagoe_tests.dll と同じ folder にあるので、その folder から依存先を探すよう読み込む。
@@ -56,6 +65,30 @@ $failures = [UtagoeTestRunner]::Run((Join-Path $build 'utagoe_tests.dll'), $log)
 Get-Content $log -Encoding UTF8 | Select-Object -Last 1
 if ($failures -ne 0) { Get-Content $log -Encoding UTF8 | Select-String 'FAIL'; throw 'core tests failed' }
 
+$signScript = Join-Path $root 'sign.ps1'
+function Invoke-Sign([string]$what, [string[]]$files) {
+    if (-not $Release) { return }
+    Write-Host $what
+    & $signScript -Files $files
+}
+Invoke-Sign 'core: sign DLLs' (@(Join-Path $build 'utagoe_core.dll') + @(Get-ChildItem $build -Filter 'utagoe-*.dll' | ForEach-Object FullName))
+
+Write-Host 'ui: windows only use the element library'
+$uiRoot = Join-Path $root 'utagoe-ui'
+$behaviours = 'PlayerLink', 'ToggleDraw', 'FitText', 'DarkScroll', 'FocusLine', 'HelpLinks', 'WaveTrack', 'SpanState'
+$elements = Get-ChildItem (Join-Path $uiRoot 'Ui\Elements') -Filter *.cs |
+    Select-String -Pattern '^internal (?:sealed |abstract )?class (\w+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } |
+    Where-Object { $behaviours -notcontains $_ }
+$controls = 'Control', 'Label', 'Button', 'TextBox', 'RichTextBox', 'ComboBox', 'CheckBox', 'RadioButton', 'Panel', 'GroupBox', 'LinkLabel',
+            'PictureBox', 'TrackBar', 'NumericUpDown', 'ListBox', 'FlowLayoutPanel', 'TableLayoutPanel', 'SplitContainer', 'HScrollBar',
+            'VScrollBar', 'TabPage', 'TabControl', 'ProgressBar', 'UserControl'
+$pattern = '\bnew\s+(?:System\.Windows\.Forms\.)?(' + (($controls + $elements) -join '|') + ')\s*[({]'
+$hits = Get-ChildItem (Join-Path $uiRoot 'Forms') -Filter *.cs | Select-String -Pattern $pattern
+if ($hits) {
+    $hits | ForEach-Object { "  $($_.Filename):$($_.LineNumber): $($_.Line.Trim())" }
+    throw 'windows must create their controls through Ui.Element (add the element to the library first)'
+}
+
 Write-Host 'ui: development build'
 Invoke-Native 'UI build' { dotnet build $ui -c Release --nologo -v quiet }
 
@@ -68,13 +101,16 @@ Invoke-Native 'UI publish' {
 }
 
 # 配布用の setup: 本体を圧縮して埋め込み、.NET が無ければ Microsoft から入れてから本体を起動する native の exe。
-Write-Host 'setup: dist\Utagoe.exe'
 $payload = Join-Path $app 'Utagoe.exe'
+Invoke-Sign 'ui: sign app' $payload
+
+Write-Host 'setup: dist\Utagoe.exe'
 Invoke-Native 'CMake configure (setup)' { cmake -S $core -B $build "-DUTAGOE_SETUP_PAYLOAD=$payload" } | Out-Null
 Invoke-Native 'setup build' { cmake --build $build --target utagoe_setup } | Select-String 'packed' | ForEach-Object { "  $_" }
 New-Item -ItemType Directory -Force $dist | Out-Null
 Get-ChildItem $dist | Remove-Item -Recurse -Force
 Copy-Item (Join-Path $build 'UtagoeSetup.exe') (Join-Path $dist 'Utagoe.exe')
+Invoke-Sign 'setup: sign' (Join-Path $dist 'Utagoe.exe')
 $size = (Get-Item (Join-Path $dist 'Utagoe.exe')).Length / 1MB
 
-Write-Host ("done: {0}\Utagoe.exe ({1:0.0} MB)" -f $dist, $size)
+Write-Host ("done: {0}\Utagoe.exe ({1:0.0} MB, {2})" -f $dist, $size, $(if ($Release) { 'signed release' } else { 'local, unsigned' }))

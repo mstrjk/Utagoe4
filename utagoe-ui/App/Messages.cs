@@ -13,7 +13,6 @@ internal static class Messages
 
     // v3 の「wav 16-bit のみ」「sample rate 一致が必要」という制限はなくなったので、その文言は使わない。
     public static string NeedFiles => L.T("Select the original, the instrumental and an output folder.");
-    public static string NeedOriginal => L.T("Select the original and an output folder.");
     public static string ChooseFolder => L.T("Choose the folder Utagoe saves into.");
     public static string FolderError(string folder, string error) => L.F("The output folder cannot be used:\n{0}\n\n{1}", folder, error);
     public static string Unreadable(string which, string error) => which == "original"
@@ -83,19 +82,13 @@ internal static class Messages
         "Spatial: stereo image (may dull vocals)"
     );
     public static string ModelGroup => L.T("Waveform Processing Algorithm");
-    public static readonly int[] ModelOrder = { 13, 0, 1, 2, 3, 6, 12, 7, 8, 9, 10, 11 };
+    public static readonly int[] ModelOrder = { 0, 1, 2, 6, 8, 11 };
     public static string[] ModelNames => L.A(
-        "Auto: try them all, keep the best",
         "Utagoe v3 (time-domain subtraction)",
-        "Robust: level, EQ, polarity, stereo",
+        "Robust: level, EQ, polarity, stereo, saturation",
         "Kalman: slowly changing level/EQ",
-        "Hammerstein: mild saturation differences",
-        "Ensemble Small: consensus of three",
-        "Ensemble Large: consensus of all",
-        "Rational: phase-matched subtraction",
+        "Ensemble: consensus of three",
         "Surface: smooth time-varying EQ/phase",
-        "Trend: remaster level changes over time",
-        "CTF: short smear/reverb differences",
         "Low-rank: structured remaster changes"
     );
     public readonly record struct AlgoStats(double Sdr, double Sir, double Sar);
@@ -106,17 +99,17 @@ internal static class Messages
     };
     public static readonly AlgoStats?[] FreqStats = { new(-2.39, 2.65, 0.64), new(0.01, -0.19, 1.80), new(-5.12, -3.69, 2.91) };
     public static string AlignGroup => L.T("Alignment");
-    // 代替モデルは level を自分で合わせるので、Instrumental Level Adjustment は使わない。そのとき group の見出しで理由を示す。
     public static string LevelGroup => L.T("Instrumental Level Adjustment");
-    public static readonly string[] ModelShortNames = { "v3", "Robust", "Kalman", "Hammerstein", "NMF", "Spatial", "Ensemble Small", "Rational", "Surface", "Trend", "CTF", "Low-rank", "Ensemble Large", "Auto" };
-    public static string LevelSetByModel(int model) =>
-        L.F("Level set by the {0} algorithm", ModelShortNames[Math.Clamp(model, 0, ModelShortNames.Length - 1)]);
+    public static readonly string[] ModelShortNames = { "v3", "Robust", "Kalman", "Robust", "NMF", "Spatial", "Ensemble", "Robust", "Surface", "Robust", "Robust", "Low-rank", "Ensemble", "Robust" };
     public static string[] AlignNames => L.A( "Utagoe v3 analysis", "Cross-correlation", "Dense time map"
     );
     public static string SpansGroup => L.T("Vocal-Free Passages");
     public static string MatchBandwidth => L.T("Match lowest bandwidth");
     public static string MatchLowEnd => L.T("Match low end");
     public static string RemoveSubsonic => L.T("Remove sub-bass rumble (below 20 Hz)");
+    public static string FftGroup => L.T("Frequency Resolution");
+    public static readonly int[] FftValues = { 0, 1024, 2048, 4096, 8192 };
+    public static string[] FftNames => new[] { L.T("Automatic"), "1024", "2048", "4096", "8192" };
     public static string SpansHint => L.T("Times with no vocal, e.g. 0-10, 2:00-2:08. Calibration uses only these. Leave empty to use the whole song.");
     public static string ModelNote => L.T("Used by the Waveform method. Alignment also lines up the aligned pair output.");
 
@@ -125,52 +118,13 @@ internal static class Messages
     public static string OutputKindLabel => L.T("Save:");
     public static string[] SaveNames => L.A("Default", "Aligned pair", "Before post-processing", "Ensemble members");
     public static string MethodTab => L.T("Method");
-    public static string CentreTab => L.T("Centre / Sides");
     public static string MethodOptions => L.T("Method Options");
-    public static string NeedsBoth => L.T("Needs the original and its instrumental.");
-    public static string NeedsOriginal => L.T("Only the original is needed.");
-    public static string CentreGroup => L.T("Centre / Sides Method");
-    public static string[] CentreNames => L.A(
-        "True M/S: exact mid and side, no guessing",
-        "Phantom: equal level and phase in both",
-        "Coherence: steady, smoothed centre image",
-        "ADRess: narrow centre by pan nulling",
-        "DUET: narrow centre by level and delay",
-        "PCA: dominant centred component",
-        "Pretty: softest, fewest artifacts"
-    );
-    public static string RepeatsGroup => L.T("Repeats");
-    public static string RepeatGuideLabel => L.T("Guide:");
-    public static string[] RepeatGuideNames => L.A( "Auto", "Full mix", "Side (L-R)"
-    );
-    public static string RepeatSearchLabel => L.T("Search:");
-    public static string[] RepeatSearchNames => L.A( "Normal", "Broad (slower)"
-    );
-    public static string UpmixTab => L.T("Upmix");
-    public static string UpmixGroup => L.T("Upmix Method");
-    public static string[] UpmixNames => L.A(
-        "Angle: smooth spread by stereo position",
-        "Slice: five sharp sectors",
-        "Hybrid: Angle, with Slice on hits",
-        "Fold exact: folds back to the original",
-        "Guided scene: instrumental fills the room",
-        "Scene vector: wide scene from the mix",
-        "Reference scene: vocal front, band around",
-        "Contrast covariance: what the mix adds",
-        "Modulation lock: follows the instrumental",
-        "Vocal anchor: vocal centre, wide parts behind"
-    );
-    public static string UpmixLayoutLabel => L.T("Speaker layout:");
-    public static string UpmixLfe => L.T("LFE (subwoofer) channel");
-    public static string UpmixVocalLabel => L.T("Vocal found by:");
-    public static string[] UpmixVocalNames => L.A( "Frequency", "Waveform"
-    );
-    public static string UpmixNote => L.T("Saves one surround file (_upmix). Formats that can't hold surround are saved as WAV.");
     public static string OverwriteFiles => L.T("Overwrite existing files");
     public static string NormaliseOutput => L.T("Normalise output");
     public static string NormaliseHint => L.T("Use if results are clipping");
+    public static string CacheSteps => L.T("Cache steps");
+    public static string CacheHint => L.T("Keeps decoding, matching and alignment in Music\\Utagoe\\cache, so trying another algorithm on the same files starts straight at the algorithm. Turning it off deletes the cache.");
     public static string OverwritePrompt(string name) => L.F("Do you want to overwrite {0}?", name);
-    public static string NoRepeats => L.T("No repeated passage passed the cancellation test, so no audio was saved. repeats.csv lists every passage that was checked.");
     public const string PairSuffix      = "_aligned";
 
     // (?) で出す説明 (v4)。内容は core の実装 (engine.cpp / freq_engine.cpp / extract.cpp) に合わせている。
@@ -190,11 +144,7 @@ internal static class Messages
             "Frequency: compares the two in the frequency domain and removes what the instrumental covers. " +
             "More forgiving when the instrumental isn't an exact match.\n\n" +
             "Waveform: subtracts the lined-up instrumental sample by sample. " +
-            "Cleanest when the instrumental is the exact same mix.\n\n" +
-            "Centre + sides: no instrumental needed. Splits the original into what sits in the centre and everything else.\n\n" +
-            "Repeats: no instrumental needed. Finds passages that repeat within the original and saves " +
-            "what each repeat shares with its earlier copy and what changed.\n\n" +
-            "Upmix: turns the original into 5.1 or 7.1 surround. Some upmix methods also use the instrumental.");
+            "Cleanest when the instrumental is the exact same mix.");
         public static string Accuracy => L.T("Accuracy Priority (Frequency)\n" +
             "Quality: a frequency is removed only when the instrumental is stronger there and its phase matches. Keeps the vocal cleaner.\n\n" +
             "Extraction: removed whenever the instrumental is stronger. Removes more instrumental, but can thin the vocal.");
@@ -219,6 +169,10 @@ internal static class Messages
         public static string Oversampling => L.T("Oversampling (Waveform)\n" +
             "Lines the instrumental up in steps smaller than one sample. " +
             "The multiplier is the number of steps per sample: higher is more precise but slower.");
+        public static string Fft => L.T("Frequency Resolution\n" +
+            "How finely the algorithm splits the sound into frequencies when it measures how the instrumental differs from the original. " +
+            "Larger sizes see finer detail and suit dense, steady mixes; smaller sizes follow fast changes. " +
+            "Automatic uses each algorithm's best size: 2048 for Robust, Kalman and Ensemble, 1024 for Surface.");
         public static string Block => L.T("Block Length\n" +
             "The song is processed in blocks of this length. " +
             "Shorter blocks follow drift and level changes faster; longer ones are steadier.");
@@ -231,8 +185,7 @@ internal static class Messages
             "Aligned pair: the original (_main) and the instrumental lined up to it in time and polarity (_inst), with the same length, " +
             "rate and channels. Levels are left untouched. On its own, it skips extraction.\n" +
             "Before post-processing: the vocal before Filtering and the sub-bass cut (_raw).\n" +
-            "Ensemble members: each algorithm inside Ensemble Small, Ensemble Large or Auto, on its own (_robust, _kalman, ...).\n" +
-            "The extra files are for the Frequency and Waveform methods. Centre + sides, Repeats and Upmix always save their own files.\n\n" +
+            "Ensemble members: each algorithm inside Ensemble, on its own (_robust, _kalman, ...).\n\n" +
             "Format, Bit Depth and Bitrate apply to every file written.");
         public static string Gpu => L.T("GPU Acceleration\n" +
             "Exact: only the alignment searches run on the GPU. Results are identical to the CPU.\n" +
@@ -241,13 +194,9 @@ internal static class Messages
             "v3: Utagoe's original subtraction with one level for the instrumental.\n" +
             "The other algorithms measure how the instrumental differs from the original at every frequency " +
             "and correct for it (level, EQ, polarity, stereo, and more), so they set the level themselves.\n\n" +
-            "Rational, Surface, Trend, CTF and Low-rank learn only from the stereo difference (left minus right), " +
+            "Surface and Low-rank learn only from the stereo difference (left minus right), " +
             "so a centred vocal never steers them. They need stereo files.\n\n" +
-            "Ensemble Small: Robust, Kalman and Hammerstein vote; where they agree their consensus is used, otherwise Robust.\n" +
-            "Ensemble Large: every algorithm votes the same way (the stereo-difference ones only on stereo files). Slower.\n" +
-            "Auto: picks the alignment, runs every algorithm, and keeps the one (or ensemble) that leaves the least backing " +
-            "in the stereo difference, preferring the simpler one when they're close. The terminal shows every score. " +
-            "Mono files use Ensemble Small.");
+            "Ensemble: Robust (with and without its saturation correction) and Kalman vote; where they agree their consensus is used, otherwise Robust.");
         public static string FreqModel => L.T("Frequency Processing Algorithm\n" +
             "Utagoe v3: compares the two in the frequency domain and removes what the instrumental covers. " +
             "Accuracy Priority and Extractable Level set how much.\n" +
@@ -301,57 +250,9 @@ internal static class Messages
         public static string BecauseGcc => L.T("this alignment doesn't run v3's analysis.");
         public static string BecauseV3Align => L.T("v3 subtraction always uses v3's analysis. Alignment is used by the other algorithms and by the Aligned pair output.");
         public static string BecauseV3Model => L.T("only the algorithms other than v3 use this.");
-        public static string BecauseModel(string name) => L.F("the {0} algorithm fits the level itself.", name);
+        public static string BecauseV3Only => L.T("only Utagoe v3 uses this.");
         public static string BecauseNoSpans(string name) => L.F("the {0} algorithm learns from the whole song, using the stereo difference instead.", name);
-        public static string BecauseSplit => L.T("The method is Centre + sides, which only splits the original.");
-        public static string BecauseNotSplit => L.T("The method isn't Centre + sides.");
-        public static string BecauseRepeats => L.T("The method is Repeats, which only searches the original.");
-        public static string BecauseNotRepeats => L.T("The method isn't Repeats.");
-        public static string BecauseUpmix => L.T("The method is Upmix, and this upmix method doesn't extract the vocal.");
-        public static string BecauseNotUpmix => L.T("The method isn't Upmix.");
-        public static string BecauseFiveOne => L.T("This upmix method only makes 5.1.");
-        public static string BecauseNotReferenceScene => L.T("Only Reference scene and Vocal anchor find the vocal first.");
-        public static string Upmix => L.T("Upmix Method\n" +
-            "Turns the stereo original into surround: front left and right, centre, LFE and surrounds.\n\n" +
-            "Angle: every sound is placed by where it sits between left and right, spread smoothly around the room.\n" +
-            "Slice: the same, but in five sharp sectors. More separated, can sound more surgical.\n" +
-            "Hybrid: Angle most of the time, Slice on drum hits so they don't smear.\n" +
-            "Fold exact: Utagoe's own split by level, phase and similarity.\n" +
-            "Guided scene: needs the instrumental. Sound that is in the instrumental may fill the room; " +
-            "what only the original has (the vocal) stays to the front and centre.\n" +
-            "Scene vector: a wider scene with ambience, made from the original only. Can make 7.1.\n" +
-            "Reference scene: needs the instrumental. Utagoe extracts the vocal first (by Frequency or Waveform, with your other settings), " +
-            "puts it up front and spreads the rest around the room. Can make 7.1.\n" +
-            "Contrast covariance: needs the instrumental. Compares the stereo shape of the original with the instrumental's. " +
-            "What the original adds stays to the front; the rest takes the instrumental's placement. Holds up when the instrumental isn't an exact match.\n" +
-            "Modulation lock: needs the instrumental. Sound that rises, falls and moves the way the instrumental does takes its placement; " +
-            "anything else stays to the front. The two don't need to line up exactly.\n" +
-            "Vocal anchor: needs the instrumental. Utagoe extracts the vocal first and makes it the centre. The fronts come from Contrast covariance " +
-            "with a little vocal added. The surrounds come from the instrumental, plus any part of the vocal that is spread wide " +
-            "(doubles, wide harmonies, stereo reverb); a centred vocal stays out of them. Doesn't fold back exactly.\n\n" +
-            "Angle, Slice, Hybrid, Fold exact, Guided scene, Contrast covariance and Modulation lock fold back down to exactly the original stereo. " +
-            "LFE is a low-frequency copy of the middle; turn it off if your system does its own bass management.");
-        public static string Repeats => L.T("Repeats\n" +
-            "Finds passages that come back later in the same song (a chorus, a loop, a riff) and tests each one by cancelling " +
-            "the later copy against the earlier one. Only pairs that really cancel are saved, in a _repeats folder: " +
-            "_shared is the part of the later copy that the earlier one explains, _difference is what changed " +
-            "(an added vocal, harmony or instrument). Together they are exactly the later passage. " +
-            "repeats.csv lists every pair that was tested and how well it cancelled.\n\n" +
-            "Guide: what the fit listens to. Auto uses the side (left minus right) when the song is wide enough, " +
-            "so a centred vocal doesn't steer it. Full mix uses both channels. Side always uses left minus right.\n" +
-            "Search: Normal tests the best 24 of 120 candidates. Broad tests 120 of 400 and takes several times longer.\n\n" +
-            "The difference is a contrast, not a clean stem: anything the earlier copy had that the later one lacks shows up in it, inverted.");
-        public static string Centre => L.T("Centre / Sides Method\n" +
-            "How the original is split. The centre file holds what sits in the middle of the stereo image, " +
-            "the sides file holds the rest, and the two always add back up to the original.\n\n" +
-            "True M/S: plain mid and side. Anything equal in both channels counts as centre.\n" +
-            "Phantom: only the part with the same level and phase in both channels.\n" +
-            "Coherence: centre judged from steady, averaged channel similarity. Less flicker.\n" +
-            "ADRess and DUET: very narrow centre; anything panned even a little goes to the sides.\n" +
-            "PCA: the dominant local component, when it points to the centre.\n" +
-            "Pretty: the softest blend of several sizes, with the fewest watery artifacts.\n\n" +
-            "Two channels can't tell a centred vocal from a centred kick or bass, so the centre file holds everything centred. Needs a stereo file.");
-        public static string BecauseAuto => L.T("Auto picks the alignment itself (dense time map on stereo files, Utagoe v3 analysis otherwise).");
+        public static string BecauseFixedFft(string name) => L.F("the {0} algorithm works at a fixed resolution.", name);
         public static string BecauseAutoName => L.T("Automatically Name Output File is off.");
         public static string BecauseGpuOff => L.T("GPU acceleration is off.");
     }
@@ -361,7 +262,6 @@ internal static class Messages
     public static string ResetTitle => L.T("Reset to defaults?");
     public static string ResetConfirm => L.T("All processing settings go back to their defaults and are saved right away. Your theme and output folder are kept.");
     // 別 window の Settings は OK を押すまで保存しない。
-    public static string ResetConfirmOk => L.T("All processing settings go back to their defaults. Nothing is saved until you press OK. Your theme and output folder are kept.");
     public static string SettingsPanel => L.T("Settings");
     public static string MainPanel => L.T("Utagoe");
     public static string InfoPanel => L.T("Information");

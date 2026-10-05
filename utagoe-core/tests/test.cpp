@@ -9,7 +9,6 @@
 #include "../src/log.h"
 #include "../src/algorithms/hardpair/hp.h"
 #include "../src/algorithms/bandwidth/bw.h"
-#include "../src/algorithms/upmix/upmix.h"
 #include "../src/algorithms/lowend/lowend.h"
 #include "utagoe.h"
 #include "utagoe_c.h"
@@ -525,11 +524,10 @@ void testWaveModels() {
     const double v3snr = v3r ? vocalSnr(v3r) : -999;
     say("    %-12s %-8s vocal SNR %6.1f dB %s\n", "v3", "", v3snr, v3r.alignment.debugString().c_str());
 
-    const WaveModel models[] = {WaveModel::Robust, WaveModel::Kalman, WaveModel::Hammerstein,
-                                WaveModel::Nmf, WaveModel::Spatial, WaveModel::Ensemble};
-    const char* names[] = {"Robust", "Kalman", "Hammerstein", "NMF", "Spatial", "Ensemble"};
+    const WaveModel models[] = {WaveModel::Robust, WaveModel::Kalman, WaveModel::Nmf, WaveModel::Spatial, WaveModel::Ensemble};
+    const char* names[] = {"Robust", "Kalman", "NMF", "Spatial", "Ensemble"};
     for (int a = 0; a < 2; ++a) {
-        for (int m = 0; m < 6; ++m) {
+        for (int m = 0; m < 5; ++m) {
             Settings s = base;
             s.waveModel = models[m];
             s.waveAlign = a == 0 ? WaveAlign::V3Block : WaveAlign::Gcc;
@@ -544,19 +542,19 @@ void testWaveModels() {
             std::snprintf(what, sizeof what, "%s (%s) runs and gives finite full-length output", names[m], a == 0 ? "v3 align" : "GCC");
             check(finite, what);
             // 位相の合う減算系のモデルは、EQ の違う組で v3 の単純な減算より良くなるはず。
-            if (m <= 2 || m == 5) {
+            if (m <= 1 || m == 4) {
                 std::snprintf(what, sizeof what, "%s (%s) beats v3 on an EQ'd instrumental", names[m], a == 0 ? "v3 align" : "GCC");
                 check(db > v3snr + 6.0, what);
             }
         }
     }
 
-    const WaveModel algorithms[] = {WaveModel::Rational, WaveModel::Surface, WaveModel::Trend, WaveModel::Ctf, WaveModel::LowRank};
-    const char* algorithmNames[] = {"Rational", "Surface", "Trend", "CTF", "Low-rank"};
+    const WaveModel algorithms[] = {WaveModel::Surface, WaveModel::LowRank};
+    const char* algorithmNames[] = {"Surface", "Low-rank"};
     const WaveAlign aligns[] = {WaveAlign::Dense, WaveAlign::V3Block, WaveAlign::Gcc};
     const char* alignNames[] = {"dense", "v3 align", "GCC"};
     for (int a = 0; a < 3; ++a) {
-        for (int m = 0; m < 5; ++m) {
+        for (int m = 0; m < 2; ++m) {
             Settings s = base;
             s.waveModel = algorithms[m];
             s.waveAlign = aligns[a];
@@ -610,42 +608,6 @@ void testWaveModels() {
         ms.waveModel = WaveModel::Surface;
         const ExtractResult mr = extract(monoOrig, monoInst, ms, false);
         check(!mr && mr.error.find("stereo") != std::string::npos, "the algorithms report that they need stereo input");
-    }
-
-    for (WaveModel m : {WaveModel::EnsembleLarge, WaveModel::Auto}) {
-        const char* mn = m == WaveModel::Auto ? "Auto" : "Ensemble Large";
-        for (int a = 0; a < 3; ++a) {
-            Settings s = base;
-            s.waveModel = m;
-            s.waveAlign = aligns[a];
-            const ExtractResult r = extract(orig, inst, s, false);
-            bool finite = static_cast<bool>(r) && r.vocal.samples.size() == orig.samples.size();
-            if (finite)
-                for (float v : r.vocal.samples) finite = finite && std::isfinite(v);
-            const double db = finite ? vocalSnr(r) : -999;
-            say("    %-14s %-8s vocal SNR %6.1f dB %s%s\n", mn, alignNames[a], db, r.alignment.debugString().c_str(),
-                r ? "" : (" error: " + r.error).c_str());
-            char what[96];
-            std::snprintf(what, sizeof what, "%s (%s) runs and beats v3 by 6 dB on an EQ'd instrumental", mn, alignNames[a]);
-            check(finite && db > v3snr + 6.0, what);
-            if (m == WaveModel::Auto) break;
-        }
-    }
-    {
-        AudioBuffer mo, mi;
-        mo.sampleRate = mi.sampleRate = rate;
-        mo.channels = mi.channels = 1;
-        mo.samples.resize(frames);
-        mi.samples.resize(frames);
-        for (std::size_t f = 0; f < frames; ++f) {
-            mo.samples[f] = orig.samples[f * 2];
-            mi.samples[f] = inst.samples[f * 2];
-        }
-        Settings s = base;
-        s.waveModel = WaveModel::Auto;
-        const ExtractResult r = extract(mo, mi, s, false);
-        say("    Auto on mono: %s%s\n", r.alignment.debugString().c_str(), r ? "" : (" error: " + r.error).c_str());
-        check(r && r.alignment.model.find("->Ensemble Small") != std::string::npos, "Auto on mono uses Ensemble Small");
     }
 
     // 声の無い区間を指定すると、その区間だけで較正する。
@@ -1210,9 +1172,10 @@ void testSettingsRoundTrip() {
     a.saveMask     = kSaveDefault | kSaveRaw;
     a.outputFolder = "C:/Users/someone/Music/歌声 Utagoe";
     a.appIcon      = "rainbow";
-    a.waveModel    = WaveModel::Hammerstein;
+    a.waveModel    = WaveModel::Kalman;
     a.waveAlign    = WaveAlign::Gcc;
     a.fitSpans     = "0-10, 2:00-2:08";
+    a.waveFft      = 4096;
 
     const std::string path = tempPath("settings.ini");
     check(a.save(path), "save");
@@ -1226,7 +1189,7 @@ void testSettingsRoundTrip() {
           "round-trips exactly");
     check(b.outputFormat == a.outputFormat && b.outputDepth == a.outputDepth &&
           b.outputBitrate == a.outputBitrate && b.outputKind == a.outputKind && b.saveMask == a.saveMask && b.outputFolder == a.outputFolder && b.appIcon == a.appIcon, "output settings round-trip");
-    check(b.waveModel == a.waveModel && b.waveAlign == a.waveAlign && b.fitSpans == a.fitSpans,
+    check(b.waveModel == a.waveModel && b.waveAlign == a.waveAlign && b.fitSpans == a.fitSpans && b.waveFft == 4096,
           "waveform model settings round-trip");
 
     Settings f;
@@ -1252,75 +1215,6 @@ void testSettingsRoundTrip() {
         check(m.mergeMode == MergeMode::ByFrequency && m.freqModel == freq && m.waveModel == WaveModel::V3,
               model == WaveModel::Nmf ? "an old Waveform NMF setting opens as Frequency NMF" : "an old Waveform Spatial setting opens as Frequency Spatial");
     }
-    fs::remove(fs::u8path(path));
-}
-
-void testCenterSides() {
-    say("Centre + sides\n");
-    const int rate = 44100;
-    const std::size_t frames = static_cast<std::size_t>(rate) * 4;
-    AudioBuffer in;
-    in.sampleRate = rate;
-    in.channels = 2;
-    in.samples.resize(frames * 2);
-    std::vector<double> centre(frames), left(frames);
-    for (std::size_t f = 0; f < frames; ++f) {
-        const double t = static_cast<double>(f) / rate;
-        centre[f] = 0.2 * std::sin(2 * PI * 440 * t);
-        left[f] = 0.2 * std::sin(2 * PI * 1250 * t);
-        in.samples[f * 2] = static_cast<float>(centre[f] + left[f]);
-        in.samples[f * 2 + 1] = static_cast<float>(centre[f]);
-    }
-    const char* names[] = {"True M/S", "Phantom", "Coherence", "ADRess", "DUET", "PCA", "Pretty"};
-    for (int m = 0; m < 7; ++m) {
-        Settings st;
-        st.outputKind = OutputKind::CenterSides;
-        st.centerMethod = m;
-        const ExtractResult r = extractCenterSides(in, st);
-        double recon = 0, inC = 0, inL = 0, cE = 0;
-        bool ok = r && r.vocal.samples.size() == in.samples.size() && r.alignedInst.samples.size() == in.samples.size();
-        if (ok)
-            for (std::size_t f = frames / 8; f < frames - frames / 8; ++f) {
-                for (int c = 0; c < 2; ++c) {
-                    const std::size_t i = f * 2 + static_cast<std::size_t>(c);
-                    recon = std::max(recon, static_cast<double>(std::abs(r.vocal.samples[i] + r.alignedInst.samples[i] - in.samples[i])));
-                }
-                const double cv = r.vocal.samples[f * 2];
-                inC += cv * centre[f];
-                inL += cv * left[f];
-                cE += centre[f] * centre[f];
-            }
-        const double keepCentre = inC / std::max(cE, 1e-30), leakLeft = inL / std::max(cE, 1e-30);
-        say("    %-10s centre tone kept %.3f, hard-left tone in centre %.3f, max |centre+sides-original| %.1e\n", names[m], keepCentre, leakLeft, recon);
-        char what[96];
-        std::snprintf(what, sizeof what, "%s: centre + sides rebuilds the original", names[m]);
-        check(ok && recon < 1e-5, what);
-        if (m == 0) {
-            check(std::abs(keepCentre - 1.0) < 1e-3 && std::abs(leakLeft - 0.5) < 2e-2, "True M/S is exact mid");
-        } else {
-            std::snprintf(what, sizeof what, "%s: keeps the centred tone and leaves the hard-left tone in the sides", names[m]);
-            check(keepCentre > 0.8 && std::abs(leakLeft) < 0.05, what);
-        }
-    }
-    AudioBuffer mono;
-    mono.sampleRate = rate;
-    mono.channels = 1;
-    mono.samples.assign(frames, 0.1f);
-    Settings st;
-    st.outputKind = OutputKind::CenterSides;
-    check(!extractCenterSides(mono, st), "Centre + sides refuses a mono file");
-    std::string a, b;
-    outputPaths("C:/x/song.flac", OutputKind::CenterSides, a, b);
-    check(a == "C:/x/song_centre.flac" && b == "C:/x/song_sides.flac", "centre + sides file names");
-
-    Settings w;
-    w.outputKind = OutputKind::CenterSides;
-    w.centerMethod = 5;
-    const std::string path = tempPath("cs.ini");
-    w.save(path);
-    Settings r;
-    r.load(path);
-    check(r.outputKind == OutputKind::CenterSides && r.centerMethod == 5, "centre + sides settings round-trip");
     fs::remove(fs::u8path(path));
 }
 
@@ -1407,157 +1301,6 @@ void testBandwidth() {
     for (std::size_t k = 0; k < a.vocal.samples.size() && k < b.vocal.samples.size(); ++k)
         diff = std::max(diff, static_cast<double>(std::abs(a.vocal.samples[k] - b.vocal.samples[k])));
     check(a && b && diff == 0.0, "two full-band files are left untouched");
-}
-
-void testUpmix() {
-    say("Upmix\n");
-    const int rate = 44100;
-    const std::size_t frames = static_cast<std::size_t>(rate) * 6;
-    AudioBuffer inst, mix;
-    inst.sampleRate = mix.sampleRate = rate;
-    inst.channels = mix.channels = 2;
-    inst.samples.resize(frames * 2);
-    mix.samples.resize(frames * 2);
-    for (std::size_t f = 0; f < frames; ++f) {
-        const double t = static_cast<double>(f) / rate;
-        const double left = 0.2 * std::sin(2 * PI * 660 * t), both = 0.1 * std::sin(2 * PI * 110 * t);
-        const double voc = 0.2 * std::sin(2 * PI * 440 * t);
-        inst.samples[f * 2] = static_cast<float>(left + both);
-        inst.samples[f * 2 + 1] = static_cast<float>(both);
-        mix.samples[f * 2] = static_cast<float>(left + both + voc);
-        mix.samples[f * 2 + 1] = static_cast<float>(both + voc);
-    }
-    const char* names[] = {"Angle", "Slice", "Hybrid", "Fold exact", "Guided scene", "Scene vector", "Reference scene", "Contrast covariance", "Modulation lock", "Vocal anchor"};
-    for (int m = 0; m < 10; ++m) {
-        for (int seven = 0; seven < 2; ++seven) {
-            if (seven && m != 5 && m != 6) continue;
-            Settings s;
-            s.outputKind = OutputKind::Upmix;
-            s.upmixMethod = m;
-            s.upmixSevenOne = seven != 0;
-            s.mergeMode = MergeMode::ByWaveform;
-            s.waveModel = WaveModel::V3;
-            const ExtractResult r = extractUpmix(mix, (m == 4 || m >= 6) ? &inst : nullptr, s);
-            const int want = seven ? 8 : 6;
-            bool finite = static_cast<bool>(r);
-            for (float v : r.vocal.samples) finite = finite && std::isfinite(v);
-            double foldPeak = 0, centreShare = 0;
-            if (r && r.vocal.channels == 6 && (m <= 4 || m == 7 || m == 8)) {
-                for (std::size_t f = 0; f < frames; ++f) {
-                    const float* d = &r.vocal.samples[f * 6];
-                    const double l = d[0] + std::sqrt(0.5) * d[2] + std::sqrt(0.5) * d[4], rr = d[1] + std::sqrt(0.5) * d[2] + std::sqrt(0.5) * d[5];
-                    foldPeak = std::max({foldPeak, std::abs(l - mix.samples[f * 2]), std::abs(rr - mix.samples[f * 2 + 1])});
-                }
-            }
-            if (r && r.vocal.channels >= 6) {
-                double c = 0, all = 0;
-                for (std::size_t f = 0; f < frames; ++f)
-                    for (int ch = 0; ch < r.vocal.channels; ++ch) {
-                        if (ch == 3) continue;
-                        const double v = r.vocal.samples[f * static_cast<std::size_t>(r.vocal.channels) + static_cast<std::size_t>(ch)];
-                        all += v * v;
-                        if (ch == 2) c += v * v;
-                    }
-                centreShare = c / std::max(all, 1e-30);
-            }
-            say("    %-16s %s: %d channels, fold-back peak error %.1e, centre holds %.0f%% of the energy\n", names[m], seven ? "7.1" : "5.1",
-                r.vocal.channels, foldPeak, centreShare * 100);
-            char what[96];
-            std::snprintf(what, sizeof what, "%s %s renders %d finite channels", names[m], seven ? "7.1" : "5.1", want);
-            check(r && r.vocal.channels == want && finite, what);
-            if (m <= 4 || m == 7 || m == 8) {
-                std::snprintf(what, sizeof what, "%s folds back to the original stereo", names[m]);
-                check(foldPeak < 1e-4, what);
-            }
-        }
-    }
-    Settings s;
-    s.outputKind = OutputKind::Upmix;
-    for (int m : {4, 7, 8, 9}) {
-        s.upmixMethod = m;
-        char what[96];
-        std::snprintf(what, sizeof what, "%s refuses to run without the instrumental", names[m]);
-        check(!extractUpmix(mix, nullptr, s), what);
-    }
-    {
-        std::vector<double> mx(mix.samples.begin(), mix.samples.end()), in(inst.samples.begin(), inst.samples.end());
-        std::vector<double> centred(mx.size()), quieter(mx.size()), wide(mx.size());
-        for (std::size_t i = 0; i < mx.size(); ++i) {
-            centred[i] = mx[i] - in[i];
-            quieter[i] = 0.5 * centred[i];
-            const double t = static_cast<double>(i / 2) / rate;
-            wide[i] = centred[i] + (i % 2 == 0 ? 0.15 * std::sin(2 * PI * 1500 * t) : 0.0);
-        }
-        bool c1 = false, c2 = false, c3 = false;
-        const upmix::Multi a1 = upmix::specField(mx, rate, upmix::Method::VocalAnchor, &in, true, nullptr, c1, &centred);
-        const upmix::Multi a2 = upmix::specField(mx, rate, upmix::Method::VocalAnchor, &in, true, nullptr, c2, &quieter);
-        const upmix::Multi a3 = upmix::specField(mx, rate, upmix::Method::VocalAnchor, &in, true, nullptr, c3, &wide);
-        const bool ok = !a1.v.empty() && a1.v.size() == a2.v.size() && a1.v.size() == a3.v.size();
-        double sur = 0, cen = 0, dl = 0, dr = 0;
-        std::size_t worstAt = 0;
-        for (std::size_t f = 0; ok && f < frames; ++f) {
-            for (int ch : {4, 5}) { const double d = std::abs(a1.v[f * 6 + static_cast<std::size_t>(ch)] - a2.v[f * 6 + static_cast<std::size_t>(ch)]); if (d > sur) { sur = d; worstAt = f; } }
-            cen = std::max(cen, std::abs(a1.v[f * 6 + 2] - a2.v[f * 6 + 2]));
-            dl += std::pow(a3.v[f * 6 + 4] - a1.v[f * 6 + 4], 2);
-            dr += std::pow(a3.v[f * 6 + 5] - a1.v[f * 6 + 5], 2);
-        }
-        const double wideDb = 10 * std::log10((dl + 1e-30) / (dr + 1e-30));
-        say("    Vocal anchor: centred vocal changes the surrounds by %.1e (centre by %.1e); a wide-left vocal lands %.1f dB more in SL than SR\n", sur, cen, wideDb);
-        check(ok && sur < 1e-5 && cen > 1e-3, "Vocal anchor keeps a centred vocal out of the surrounds");
-        check(ok && dl > 1e-3 && wideDb > 20.0, "Vocal anchor sends a vocal spread wide to the surround on its side");
-    }
-    std::string a, b;
-    outputPaths("C:/x/song.mp3", OutputKind::Upmix, a, b);
-    check(a == "C:/x/song_upmix.wav", "an upmix in a stereo-only format is written as WAV");
-    outputPaths("C:/x/song.flac", OutputKind::Upmix, a, b);
-    check(a == "C:/x/song_upmix.flac", "an upmix keeps FLAC");
-    Settings w;
-    w.outputKind = OutputKind::Upmix;
-    w.upmixMethod = 6;
-    w.upmixSevenOne = true;
-    w.upmixLfe = false;
-    const std::string path = tempPath("up.ini");
-    w.save(path);
-    Settings rr;
-    rr.load(path);
-    check(rr.outputKind == OutputKind::Upmix && rr.upmixMethod == 6 && rr.upmixSevenOne && !rr.upmixLfe, "upmix settings round-trip");
-    fs::remove(fs::u8path(path));
-
-    for (const auto& [channels, mask] : {std::pair{6, 0x3Fu}, std::pair{8, 0x63Fu}}) {
-        for (OutputDepth depth : {OutputDepth::Int24, OutputDepth::Float32}) {
-            AudioBuffer src;
-            src.sampleRate = 44100;
-            src.channels = channels;
-            src.samples.resize(static_cast<std::size_t>(4410 * channels));
-            for (std::size_t i = 0; i < src.samples.size(); ++i)
-                src.samples[i] = static_cast<float>(0.4 * std::sin(0.001 * static_cast<double>(i) * (1 + static_cast<double>(i % channels))));
-            const std::string wav = tempPath("surround.wav");
-            EncodeOptions opt;
-            opt.depth = depth;
-            std::string err;
-            const bool wrote = encodeAudio(wav, src, opt, err);
-            std::vector<uint8_t> head(48);
-            if (std::FILE* f = _wfopen(fs::u8path(wav).wstring().c_str(), L"rb")) {
-                head.resize(std::fread(head.data(), 1, head.size(), f));
-                std::fclose(f);
-            }
-            const auto le16 = [&](std::size_t o) { return head.size() >= o + 2 ? unsigned(head[o] | head[o + 1] << 8) : 0u; };
-            const auto le32 = [&](std::size_t o) { return le16(o) | le16(o + 2) << 16; };
-            AudioBuffer back;
-            const bool read = wrote && decodeAudio(wav, back, nullptr, err);
-            double worst = 0;
-            if (read && back.samples.size() == src.samples.size())
-                for (std::size_t i = 0; i < src.samples.size(); ++i) worst = std::max(worst, double(std::abs(back.samples[i] - src.samples[i])));
-            else
-                worst = 1;
-            char what[96];
-            std::snprintf(what, sizeof what, "%d-channel %s WAV carries speaker mask 0x%X and reads back", channels,
-                          depth == OutputDepth::Float32 ? "float" : "24-bit", mask);
-            check(le16(20) == 0xFFFE && le32(40) == mask && le16(44) == (depth == OutputDepth::Float32 ? 3u : 1u) &&
-                  back.channels == channels && worst < 1e-6, what);
-            fs::remove(fs::u8path(wav));
-        }
-    }
 }
 
 void testLowEnd() {
@@ -1713,7 +1456,6 @@ void testIntermediates() {
     say("    largest difference between the vocal and the vocal before post-processing: %.2e\n", diff);
     check(read && mainOut.samples.size() == rawOut.samples.size() && diff < 1e-4, "with no post-processing on, the file before post-processing matches the vocal");
     for (const std::string& p : expected) fs::remove(fs::u8path(p));
-    for (const char* extra : {"_hammerstein.wav"}) fs::remove(fs::u8path(stem + extra));
 
     c.saveMask = kSaveAligned;
     UtagoeResult pairRes{};
@@ -1793,119 +1535,6 @@ void testNormalise() {
     fs::remove(fs::u8path(instPath));
 }
 
-void testRepeats() {
-    say("Repeats\n");
-    const int rate = 22050;
-    const double phrase = 3.0;
-    const std::size_t pn = static_cast<std::size_t>(phrase * rate);
-    unsigned state = 12345;
-    auto noise = [&]() {
-        state = state * 1664525u + 1013904223u;
-        return static_cast<double>(state >> 8) / 16777216.0 * 2.0 - 1.0;
-    };
-    auto makePhrase = [&](const double* notes, int count, double width) {
-        std::vector<double> p(pn * 2, 0.0);
-        for (std::size_t f = 0; f < pn; ++f) {
-            const double t = static_cast<double>(f) / rate;
-            const int k = std::min(count - 1, static_cast<int>(t / (phrase / count)));
-            const double local = t - k * (phrase / count);
-            const double env = std::exp(-4.0 * local);
-            const double tone = 0.25 * env * std::sin(2 * PI * notes[k] * t) + 0.08 * env * std::sin(2 * PI * 2 * notes[k] * t);
-            const double hit = local < 0.03 ? 0.3 * noise() * (1 - local / 0.03) : 0.0;
-            p[f * 2] = tone + hit + 0.01 * noise();
-            p[f * 2 + 1] = (1 - width) * tone + hit * 0.7 + 0.01 * noise();
-        }
-        return p;
-    };
-    const double a[] = {220, 277, 330, 247, 196, 294};
-    const double b[] = {175, 392, 262, 349, 233, 311};
-    const std::vector<double> pa = makePhrase(a, 6, 0.4), pb = makePhrase(b, 6, 0.1), pc = makePhrase(b + 1, 5, 0.6);
-    const std::vector<const std::vector<double>*> layout = {&pa, &pb, &pa, &pc, &pb};
-    AudioBuffer in;
-    in.sampleRate = rate;
-    in.channels = 2;
-    in.samples.resize(pn * 2 * layout.size());
-    std::vector<double> added(pn * 2, 0.0);
-    for (std::size_t f = 0; f < pn; ++f) {
-        const double t = static_cast<double>(f) / rate;
-        added[f * 2] = 0.12 * std::sin(2 * PI * 523.25 * t) * (0.6 + 0.4 * std::sin(2 * PI * 3 * t));
-        added[f * 2 + 1] = 0.5 * added[f * 2];
-    }
-    for (std::size_t s = 0; s < layout.size(); ++s)
-        for (std::size_t i = 0; i < pn * 2; ++i)
-            in.samples[s * pn * 2 + i] = static_cast<float>((*layout[s])[i] + (s == 2 ? added[i] : 0.0));
-    Settings st;
-    st.outputKind = OutputKind::Repeats;
-    int written = 0;
-    double bestReduction = -1e9, bestAdded = 0, bestLeft = 1e9;
-    const RepeatsResult r = extractRepeats(in, st, [&](RepeatClip& c) {
-        ++written;
-        const bool sameLag = std::abs((c.target - c.source) - 2 * phrase) < 0.1 && !c.joint;
-        const bool coversAdded = c.target < 2 * phrase + 0.5 && c.target + c.duration > 3 * phrase - 0.5;
-        if (sameLag && coversAdded && c.shared.channels == 2 && c.difference.samples.size() == c.shared.samples.size()) {
-            const std::size_t off = static_cast<std::size_t>(std::llround((c.target - 2 * phrase) * rate));
-            double da = 0, aa = 0, ee = 0;
-            for (std::size_t f = 0; f < c.difference.frames(); ++f)
-                for (int ch = 0; ch < 2; ++ch) {
-                    const std::size_t i = (off + f) * 2 + static_cast<std::size_t>(ch);
-                    if (i >= added.size()) continue;
-                    const double d = c.difference.samples[f * 2 + static_cast<std::size_t>(ch)];
-                    da += d * added[i];
-                    aa += added[i] * added[i];
-                    ee += (d - added[i]) * (d - added[i]);
-                }
-            if (c.reductionDb > bestReduction) {
-                bestReduction = c.reductionDb;
-                bestAdded = da / std::max(aa, 1e-30);
-                bestLeft = 10 * std::log10(std::max(ee, 1e-30) / std::max(aa, 1e-30));
-            }
-        }
-        return true;
-    });
-    int passed = 0;
-    for (const RepeatClip& c : r.clips) passed += c.passed;
-    say("    %d regions checked, %d passed, %d written; repeat of phrase A: held-out reduction %.2f dB, added line kept %.3f, difference minus added line %.1f dB\n",
-        static_cast<int>(r.clips.size()), passed, written, bestReduction, bestAdded, bestLeft);
-    check(r && passed == written && written > 0, "repeats finds and writes verified clips");
-    check(bestReduction > 0.5 && bestLeft < -20, "the repeated phrase cancels against its earlier copy");
-    check(std::abs(bestAdded - 1.0) < 0.2, "the new line stays in the difference");
-
-    AudioBuffer mono;
-    mono.sampleRate = rate;
-    mono.channels = 1;
-    mono.samples.resize(in.frames());
-    for (std::size_t f = 0; f < in.frames(); ++f) mono.samples[f] = in.samples[f * 2];
-    Settings ms;
-    ms.outputKind = OutputKind::Repeats;
-    ms.repeatGuide = 2;
-    int monoWritten = 0;
-    const RepeatsResult mr = extractRepeats(mono, ms, [&](RepeatClip& c) { monoWritten += c.shared.channels == 1; return true; });
-    check(mr && monoWritten > 0, "repeats works on mono with the side guide falling back to full");
-
-    AudioBuffer quiet;
-    quiet.sampleRate = rate;
-    quiet.channels = 2;
-    quiet.samples.assign(static_cast<std::size_t>(rate) * 2, 0.0f);
-    const RepeatsResult qr = extractRepeats(quiet, st, nullptr);
-    check(qr && qr.clips.empty(), "repeats on silence finds nothing and does not fail");
-
-    std::string p1, p2;
-    outputPaths("C:/x/song.flac", OutputKind::Repeats, p1, p2);
-    check(p1 == "C:/x/song_repeats" && p2 == "C:/x/song_repeats/repeats.csv", "repeats folder names");
-
-    Settings w;
-    w.outputKind = OutputKind::Repeats;
-    w.repeatGuide = 2;
-    w.repeatBreadth = 1;
-    w.overwriteOutput = true;
-    const std::string path = tempPath("repeats.ini");
-    w.save(path);
-    Settings rr;
-    rr.load(path);
-    check(rr.outputKind == OutputKind::Repeats && rr.repeatGuide == 2 && rr.repeatBreadth == 1 && rr.overwriteOutput, "repeats and overwrite settings round-trip");
-    fs::remove(fs::u8path(path));
-}
-
 void testLongPaths() {
     say("Paths longer than 260 characters\n");
     fs::path dir = fs::u8path(tempPath("long"));
@@ -1959,8 +1588,80 @@ void testLongPaths() {
     _wsystem((L"cmd /c rmdir /s /q \"\\\\?\\" + fs::u8path(tempPath("long")).wstring() + L"\"").c_str());
 }
 
+void testStepCache() {
+    say("Step cache\n");
+    const int sr = 48000;
+    const std::size_t n = static_cast<std::size_t>(sr) * 8;
+    AudioBuffer mix, inst;
+    mix.sampleRate = sr;
+    inst.sampleRate = 44100;
+    mix.channels = inst.channels = 2;
+    mix.samples.resize(n * 2);
+    std::mt19937 rng(11);
+    std::normal_distribution<float> noise(0.0f, 0.05f);
+    std::vector<float> a(n), b(n);
+    for (std::size_t i = 0; i < n; ++i) { a[i] = noise(rng); b[i] = noise(rng); }
+    for (std::size_t i = 0; i < n; ++i) {
+        const double t = static_cast<double>(i) / sr;
+        const float voc = (t > 2.0 && t < 6.0) ? static_cast<float>(0.1 * std::sin(2 * 3.14159265358979 * 440 * t)) : 0.0f;
+        mix.samples[i * 2] = 0.8f * a[i] + 0.2f * b[i] + voc;
+        mix.samples[i * 2 + 1] = 0.2f * a[i] + 0.8f * b[i] + voc;
+    }
+    AudioBuffer inst48;
+    inst48.sampleRate = sr;
+    inst48.channels = 2;
+    inst48.samples.resize(n * 2);
+    for (std::size_t i = 0; i < n; ++i) {
+        inst48.samples[i * 2] = 0.8f * a[i] + 0.2f * b[i];
+        inst48.samples[i * 2 + 1] = 0.2f * a[i] + 0.8f * b[i];
+    }
+    inst = conformAudio(inst48, 44100, 2, nullptr, nullptr);
+    const std::string origPath = tempPath("cache_orig.wav"), instPath = tempPath("cache_inst.wav");
+    const std::string outA = tempPath("cache_a.wav"), outB = tempPath("cache_b.wav"), outC = tempPath("cache_c.wav");
+    EncodeOptions f32;
+    f32.depth = OutputDepth::Float32;
+    std::string err;
+    encodeAudio(origPath, mix, f32, err);
+    encodeAudio(instPath, inst, f32, err);
+    utagoe_clear_step_cache();
+    UtagoeSettings c;
+    utagoe_default_settings(&c);
+    check(c.cacheSteps == 1, "step caching is on by default");
+    c.mergeMode = 1;
+    c.waveModel = 1;
+    c.waveAlign = 1;
+    c.matchBandwidth = 1;
+    c.outputFormat = 0;
+    c.outputDepth = static_cast<int32_t>(OutputDepth::Float32);
+    UtagoeResult res{};
+    char e[512] = {};
+    const int r1 = utagoe_extract_file(origPath.c_str(), instPath.c_str(), outA.c_str(), &c, nullptr, nullptr, &res, e, sizeof e);
+    const fs::path dir = fs::u8path(tempPath("step cache"));
+    std::vector<std::string> names;
+    std::error_code ec;
+    for (const auto& f : fs::directory_iterator(dir, ec)) names.push_back(f.path().filename().u8string());
+    std::sort(names.begin(), names.end());
+    for (const std::string& name : names) say("    %s\n", name.c_str());
+    auto has = [&](const char* name) { return std::find(names.begin(), names.end(), name) != names.end(); };
+    check(r1 == 0 && has("decode_cac-rig-wav.ucache") && has("decode_cac-nst-wav.ucache") && has("conform_cac-nst-wav.ucache") &&
+          has("xcorr_cac-rig-wav.ucache"), "the steps before the algorithm are cached under step_first3-last3-format.ucache");
+    c.waveModel = 2;
+    const int r2 = utagoe_extract_file(origPath.c_str(), instPath.c_str(), outB.c_str(), &c, nullptr, nullptr, &res, e, sizeof e);
+    c.cacheSteps = 0;
+    const int r3 = utagoe_extract_file(origPath.c_str(), instPath.c_str(), outC.c_str(), &c, nullptr, nullptr, &res, e, sizeof e);
+    AudioBuffer cached, fresh;
+    const bool read = r2 == 0 && r3 == 0 && decodeAudio(outB, cached, nullptr, err) && decodeAudio(outC, fresh, nullptr, err);
+    check(read && cached.samples == fresh.samples, "an algorithm run on cached steps matches a run without the cache exactly");
+    utagoe_clear_step_cache();
+    std::size_t left = 0;
+    for (const auto& f : fs::directory_iterator(dir, ec)) left += f.path().extension() == ".ucache" ? 1 : 0;
+    check(left == 0, "clearing the step cache removes its files");
+    for (const std::string& p : {origPath, instPath, outA, outB, outC}) fs::remove(fs::u8path(p));
+}
+
 int runAll() {
     failures = 0;
+    SetEnvironmentVariableW(L"UTAGOE_CACHE_DIR", fs::u8path(tempPath("step cache")).wstring().c_str());
     testFft();
     testStackTraces();
     testKaiser();
@@ -1970,12 +1671,10 @@ int runAll() {
     testProcessingPaths();
     testGpu();
     testWaveModels();
-    testCenterSides();
-    testRepeats();
     testBandwidth();
-    testUpmix();
     testNormalise();
     testIntermediates();
+    testStepCache();
     testLowEnd();
     testExtract();
     testAlignedPair();

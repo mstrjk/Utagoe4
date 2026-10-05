@@ -7,14 +7,12 @@
 #include "gpu.h"
 #include "algorithms/refcancel/rc.h"
 #include "algorithms/hardpair/hp.h"
-#include "algorithms/centresides/cs.h"
-#include "algorithms/repeats/rp.h"
 #include "algorithms/bandwidth/bw.h"
 #include "algorithms/lowend/lowend.h"
-#include "algorithms/upmix/upmix.h"
 #include "fileio.h"
 #include "parallel.h"
 #include "log.h"
+#include "stepcache.h"
 
 #include <algorithm>
 #include <cctype>
@@ -147,17 +145,11 @@ const char* modelName(WaveModel m) {
     switch (m) {
     case WaveModel::Robust: return "Robust";
     case WaveModel::Kalman: return "Kalman";
-    case WaveModel::Hammerstein: return "Hammerstein";
     case WaveModel::Nmf: return "NMF";
     case WaveModel::Spatial: return "Spatial";
-    case WaveModel::Ensemble: return "Ensemble Small";
-    case WaveModel::Rational: return "Rational";
+    case WaveModel::Ensemble: return "Ensemble";
     case WaveModel::Surface: return "Surface";
-    case WaveModel::Trend: return "Trend";
-    case WaveModel::Ctf: return "CTF";
     case WaveModel::LowRank: return "Low-rank";
-    case WaveModel::EnsembleLarge: return "Ensemble Large";
-    case WaveModel::Auto: return "Auto";
     default: return "v3";
     }
 }
@@ -168,6 +160,19 @@ struct RcProgress {
     float from, to;
 };
 
+}
+
+WaveModel waveModelFromInt(int value) {
+    switch (value) {
+    case 1: case 3: case 7: case 9: case 10: case 13: return WaveModel::Robust;
+    case 2: return WaveModel::Kalman;
+    case 4: return WaveModel::Nmf;
+    case 5: return WaveModel::Spatial;
+    case 6: case 12: return WaveModel::Ensemble;
+    case 8: return WaveModel::Surface;
+    case 11: return WaveModel::LowRank;
+    default: return WaveModel::V3;
+    }
 }
 
 bool parseTimeSpans(const std::string& text, std::vector<std::pair<double, double>>& spans, std::string& error) {
@@ -211,12 +216,8 @@ namespace {
 // By Waveform の代替モデル。位置合わせ (v3 の block 解析か GCC) -> エンジン -> 元の後処理 (Centralization / LPF / HPF / soft clip)。
 // 元実装にない処理なので、16-bit 入力でも丸めずに float で計算する。
 bool isAlgorithm(WaveModel m) {
-    const int v = static_cast<int>(m);
-    return v >= static_cast<int>(WaveModel::Rational) && v <= static_cast<int>(WaveModel::LowRank);
+    return m == WaveModel::Surface || m == WaveModel::LowRank;
 }
-
-constexpr double kLargeStrength = 0.5;
-constexpr double kAutoMarginDb = 0.2;
 
 hp::Progress hpProgress(ProgressFn fn, void* user, float from, float to, bool& cancelled) {
     return [fn, user, from, to, &cancelled](double f, const std::string& what) {
@@ -254,6 +255,174 @@ bool gccAlign(const rc::Audio& mix, const rc::Audio& ref, int rate, std::size_t 
     return true;
 }
 
+struct GccRun {
+    GccAligned g;
+    bool ok = false;
+    std::string error;
+};
+
+std::uint64_t u(long long v) { return static_cast<std::uint64_t>(v); }
+
+void writeAudio(stepcache::Writer& w, const rc::Audio& a) {
+    w.i64(a.channels);
+    w.floats(a.v);
+}
+
+rc::Audio readAudio(stepcache::Reader& r) {
+    rc::Audio a;
+    a.channels = static_cast<int>(r.i64());
+    a.v = r.floats();
+    return a;
+}
+
+void writeBuffer(stepcache::Writer& w, const AudioBuffer& a) {
+    w.i64(a.sampleRate);
+    w.i64(a.channels);
+    w.floats(a.samples);
+}
+
+AudioBuffer readBuffer(stepcache::Reader& r) {
+    AudioBuffer a;
+    a.sampleRate = static_cast<int>(r.i64());
+    a.channels = static_cast<int>(r.i64());
+    a.samples = r.floats();
+    return a;
+}
+
+void reused() { log::detail("  reused from the step cache"); }
+
+GccRun runGcc(const rc::Audio& mix, const rc::Audio& ref, int rate, std::size_t frames) {
+    std::string k;
+    GccRun r;
+    if (stepcache::enabled()) {
+        k = stepcache::key("gcc", {stepcache::hash(mix.v), stepcache::hash(ref.v), u(mix.channels), u(rate), u(static_cast<long long>(frames))});
+        stepcache::Reader in;
+        if (stepcache::load("gcc", stepcache::Source::Original, k, in)) {
+            r.ok = in.i64() != 0;
+            r.error = in.str();
+            r.g.warped = readAudio(in);
+            r.g.valid = in.chars();
+            r.g.a.mode = static_cast<int>(in.i64());
+            r.g.a.offset = in.f64();
+            r.g.a.slope = in.f64();
+            r.g.a.score = in.f64();
+            r.g.a.anchors = static_cast<int>(in.i64());
+            r.g.a.anchorMad = in.f64();
+            r.g.inverted = in.i64() != 0;
+            if (in.ok()) {
+                reused();
+                return r;
+            }
+            r = GccRun{};
+        }
+    }
+    r.ok = gccAlign(mix, ref, rate, frames, r.g, r.error);
+    if (!k.empty()) {
+        stepcache::Writer out;
+        out.i64(r.ok);
+        out.str(r.error);
+        writeAudio(out, r.g.warped);
+        out.chars(r.g.valid);
+        out.i64(r.g.a.mode);
+        out.f64(r.g.a.offset);
+        out.f64(r.g.a.slope);
+        out.f64(r.g.a.score);
+        out.i64(r.g.a.anchors);
+        out.f64(r.g.a.anchorMad);
+        out.i64(r.g.inverted);
+        stepcache::save("gcc", stepcache::Source::Original, k, out);
+    }
+    return r;
+}
+
+struct XcorrRun {
+    rc::Alignment a;
+    rc::Audio warped;
+    std::vector<char> valid;
+};
+
+XcorrRun runXcorr(const rc::Audio& mix, const rc::Audio& ref, int rate, const rc::Config& cfg) {
+    const std::string k = stepcache::key("xcorr", {stepcache::hash(mix.v), stepcache::hash(ref.v), u(mix.channels), u(rate),
+                                                   u(static_cast<long long>(mix.frames()))});
+    XcorrRun r;
+    stepcache::Reader in;
+    if (stepcache::load("xcorr", stepcache::Source::Original, k, in)) {
+        r.a.mode = static_cast<int>(in.i64());
+        r.a.offset = in.f64();
+        r.a.slope = in.f64();
+        r.a.score = in.f64();
+        r.a.anchors = static_cast<int>(in.i64());
+        r.a.anchorMad = in.f64();
+        r.warped = readAudio(in);
+        r.valid = in.chars();
+        if (in.ok()) {
+            reused();
+            return r;
+        }
+        r = XcorrRun{};
+    }
+    r.a = rc::estimateAlignment(mix, ref, rate, cfg);
+    if (r.a.score >= cfg.minAlignmentScore) r.warped = rc::warpReference(ref, mix.frames(), r.a, cfg.sincTaps, r.valid);
+    stepcache::Writer out;
+    out.i64(r.a.mode);
+    out.f64(r.a.offset);
+    out.f64(r.a.slope);
+    out.f64(r.a.score);
+    out.i64(r.a.anchors);
+    out.f64(r.a.anchorMad);
+    writeAudio(out, r.warped);
+    out.chars(r.valid);
+    stepcache::save("xcorr", stepcache::Source::Original, k, out);
+    return r;
+}
+
+struct DenseRun {
+    rc::Audio warped;
+    hp::TimeMap map;
+};
+
+DenseRun runDense(const rc::Audio& mix, const rc::Audio& ref, int rate, const hp::Progress& progress, bool& cancelled) {
+    std::string k;
+    DenseRun r;
+    if (stepcache::enabled()) {
+        k = stepcache::key("dense", {stepcache::hash(mix.v), stepcache::hash(ref.v), u(mix.channels), u(rate)});
+        stepcache::Reader in;
+        if (stepcache::load("dense", stepcache::Source::Original, k, in)) {
+            r.warped = readAudio(in);
+            r.map.polarity = static_cast<int>(in.i64());
+            const long long stages = in.i64();
+            for (long long i = 0; i < stages && in.ok(); ++i) {
+                hp::SplineStage st;
+                st.knots = in.doubles();
+                st.coef = in.doubles();
+                st.start = in.f64();
+                st.end = in.f64();
+                r.map.stages.push_back(std::move(st));
+            }
+            if (in.ok()) {
+                reused();
+                return r;
+            }
+            r = DenseRun{};
+        }
+    }
+    r.warped = hp::alignDense(mix, ref, rate, r.map, progress, cancelled);
+    if (!cancelled && !k.empty()) {
+        stepcache::Writer out;
+        writeAudio(out, r.warped);
+        out.i64(r.map.polarity);
+        out.i64(static_cast<long long>(r.map.stages.size()));
+        for (const hp::SplineStage& st : r.map.stages) {
+            out.doubles(st.knots);
+            out.doubles(st.coef);
+            out.f64(st.start);
+            out.f64(st.end);
+        }
+        stepcache::save("dense", stepcache::Source::Original, k, out);
+    }
+    return r;
+}
+
 std::string denseInfo(const hp::TimeMap& map, std::size_t frames, int rate) {
     const double sr = static_cast<double>(rate);
     const double end = static_cast<double>(frames > 0 ? frames - 1 : 0);
@@ -273,13 +442,6 @@ const char* alignSuffix(WaveAlign a) {
     }
 }
 
-struct Candidate {
-    std::string name;
-    rc::Audio background;
-    int rank = 0;
-    bool scored = true;
-};
-
 AudioBuffer bufferOf(const rc::Audio& a, int rate) {
     AudioBuffer b;
     b.sampleRate = rate;
@@ -294,84 +456,16 @@ std::string slug(const std::string& name) {
     return out;
 }
 
-rc::Audio consensusOf(const rc::Audio& mix, const std::vector<const rc::Audio*>& backgrounds, const rc::Audio& baseline,
-                      int rate, const rc::Config& cfg, double strength) {
-    const std::size_t len = mix.frames();
-    const int C = mix.channels;
-    std::vector<double> acc(len * static_cast<std::size_t>(C), 0.0), norm(len, 0.0);
-    const std::size_t core = std::max<std::size_t>(static_cast<std::size_t>(cfg.nFft) * 4, static_cast<std::size_t>(cfg.blockSeconds * rate));
-    const std::size_t context = std::max<std::size_t>(static_cast<std::size_t>(cfg.nFft), static_cast<std::size_t>(cfg.contextSeconds * rate));
-    const std::size_t step = std::max<std::size_t>(1, static_cast<std::size_t>(core * 0.75));
-    auto slice = [&](const rc::Audio& a, std::size_t lo, std::size_t hi) {
-        rc::Audio s;
-        s.channels = C;
-        s.v.assign(a.v.begin() + static_cast<std::ptrdiff_t>(lo * C), a.v.begin() + static_cast<std::ptrdiff_t>(hi * C));
-        return s;
-    };
-    for (std::size_t a = 0; a < len; a += step) {
-        const std::size_t b = std::min(a + core, len);
-        const std::size_t left = a >= context ? a - context : 0, right = std::min(len, b + context);
-        std::vector<rc::Spec> specs;
-        specs.reserve(backgrounds.size());
-        for (const rc::Audio* bg : backgrounds) specs.push_back(rc::stft(slice(*bg, left, right), cfg.nFft, cfg.hop));
-        const rc::Spec base = rc::stft(slice(baseline, left, right), cfg.nFft, cfg.hop);
-        std::vector<const rc::Spec*> ptrs;
-        for (const auto& s : specs) ptrs.push_back(&s);
-        const rc::Audio removed = rc::istft(rc::consensusBackground(ptrs, base, strength), cfg.nFft, cfg.hop, right - left);
-        const std::size_t length = b - a;
-        for (std::size_t i = 0; i < length; ++i) {
-            double w = std::pow(std::sin(3.14159265358979323846 * (static_cast<double>(i) + 0.5) / length), 2);
-            if (a == 0 && i < std::min(step / 2, length)) w = 1.0;
-            if (b == len && i + step / 2 >= length) w = 1.0;
-            norm[a + i] += w;
-            for (int c = 0; c < C; ++c) acc[(a + i) * static_cast<std::size_t>(C) + c] += static_cast<double>(removed.at(a + i - left, c)) * w;
-        }
-    }
-    rc::Audio out;
-    out.channels = C;
-    out.v.resize(len * static_cast<std::size_t>(C));
-    for (std::size_t i = 0; i < len; ++i)
-        for (int c = 0; c < C; ++c)
-            out.at(i, c) = static_cast<float>(acc[i * static_cast<std::size_t>(C) + c] / std::max(norm[i], 1e-12));
-    return out;
-}
-
-rc::Audio subtractAudio(const rc::Audio& a, const rc::Audio& b) {
-    rc::Audio r = a;
-    for (std::size_t i = 0; i < r.v.size(); ++i) r.v[i] = a.v[i] - b.v[i];
-    return r;
-}
-
-double sideLeftoverDb(const rc::Audio& mix, const rc::Audio& background, const std::vector<char>& valid) {
-    double s = 0.0;
-    std::size_t n = 0;
-    for (std::size_t i = 0; i < mix.frames(); ++i) {
-        if (!valid.empty() && !valid[i]) continue;
-        const double d = 0.5 * ((static_cast<double>(mix.at(i, 0)) - background.at(i, 0)) - (static_cast<double>(mix.at(i, 1)) - background.at(i, 1)));
-        s += d * d;
-        ++n;
-    }
-    return 10.0 * std::log10(s / std::max<std::size_t>(n, 1) + 1e-30);
-}
-
-double distanceDb(const rc::Audio& a, const rc::Audio& b) {
-    double e = 0.0, s = 0.0;
-    for (std::size_t i = 0; i < a.v.size(); ++i) {
-        const double d = static_cast<double>(a.v[i]) - b.v[i];
-        e += d * d;
-        s += static_cast<double>(b.v[i]) * b.v[i];
-    }
-    return 10.0 * std::log10((e + 1e-30) / (s + 1e-30));
-}
-
 ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, const Settings& settings,
                            v3::Context& c, ExtractResult& res, ProgressFn progress, void* progressUser) {
     const WaveModel model = settings.waveModel;
     const bool algorithm = isAlgorithm(model);
-    const bool autoPick = model == WaveModel::Auto;
-    const bool multi = autoPick || model == WaveModel::EnsembleLarge;
     const std::string name = modelName(model);
     rc::Config cfg;
+    if (settings.waveFft > 0 && settings.mergeMode == MergeMode::ByWaveform) {
+        cfg.nFft = settings.waveFft;
+        cfg.hop = settings.waveFft / 4;
+    }
     std::string err;
     if (!algorithm && !parseTimeSpans(settings.fitSpans, cfg.fitSpans, err)) {
         res.error = err;
@@ -380,11 +474,7 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
     const int ch = orig.channels, rate = orig.sampleRate;
     const std::size_t frames = orig.frames();
     const float from = c.progressFrom;
-    WaveAlign align = settings.waveAlign;
-    if (autoPick) {
-        align = ch == 2 ? WaveAlign::Dense : WaveAlign::V3Block;
-        log::detail("  Auto: alignment %s", ch == 2 ? "dense time map" : "Utagoe v3 analysis (mono input)");
-    }
+    const WaveAlign align = settings.waveAlign;
     if (ch != 2 && (algorithm || align == WaveAlign::Dense)) {
         res.error = algorithm ? name + ": this algorithm needs a stereo original and instrumental"
                               : "the dense time map needs a stereo original and instrumental";
@@ -403,7 +493,9 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
     const bool keepMembers = (settings.saveMask & kSaveMembers) != 0;
     cfg.keepMembers = keepMembers;
     std::vector<std::pair<std::string, AudioBuffer>> members;
-    const bool prealign = algorithm || multi;
+    const bool prealign = algorithm;
+    rc::Alignment cachedAlign;
+    bool haveCachedAlign = false;
 
     auto alignV3 = [&]() {
         cfg.alignment = 0;
@@ -438,13 +530,14 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
             rc::Audio raw;
             raw.channels = ch;
             raw.v = inst.samples;
-            GccAligned g;
-            if (!gccAlign(mix, raw, rate, frames, g, err)) {
+            const auto run = runGcc(mix, raw, rate, frames);
+            if (!run.ok) {
                 st.fail();
-                res.error = err;
+                res.error = run.error;
                 return res;
             }
-            ref = std::move(g.warped);
+            const GccAligned& g = run.g;
+            ref = g.warped;
             char buf[200];
             std::snprintf(buf, sizeof buf, "align:gcc ofs:%.3f drift:%.3fppm score:%.3f phase:%d",
                           -g.a.offset, -g.a.slope * 1e6, g.a.score, g.inverted ? 1 : 0);
@@ -453,10 +546,31 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
             res.alignment.inverted = g.inverted;
             engineFrom = from + (1.0f - from) * 0.1f;
             cfg.alignment = 0;
-            valid = std::move(g.valid);
+            valid = g.valid;
         } else {
-            cfg.alignment = 1;
             ref.v = inst.samples;
+            if (stepcache::enabled() && mix.frames() > static_cast<std::size_t>(cfg.nFft) * 2) {
+                log::Stage st("cross-correlation alignment");
+                cfg.alignment = 1;
+                XcorrRun run = runXcorr(mix, ref, rate, cfg);
+                if (run.a.score < cfg.minAlignmentScore) {
+                    char msg[200];
+                    std::snprintf(msg, sizeof msg, "the alignment confidence %.3f is below %.3f; the instrumental may not match this original",
+                                  run.a.score, cfg.minAlignmentScore);
+                    st.fail();
+                    res.error = name + ": " + msg;
+                    return res;
+                }
+                log::detail("  cross-correlation: offset %.3f samples, drift %+.3f ppm, score %.3f, %d anchors (spread %.3f)",
+                            -run.a.offset, -run.a.slope * 1e6, run.a.score, run.a.anchors, run.a.anchorMad);
+                ref = std::move(run.warped);
+                valid = std::move(run.valid);
+                cachedAlign = run.a;
+                haveCachedAlign = true;
+                cfg.alignment = 0;
+            } else {
+                cfg.alignment = 1;
+            }
         }
     } else if (align == WaveAlign::Dense) {
         ref.v = inst.samples;
@@ -464,37 +578,27 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
         const float to = from + (1.0f - from) * 0.3f;
         bool cancelled = false;
         hp::TimeMap map;
-        bool fellBack = false;
         try {
-            ref = hp::alignDense(mix, ref, rate, map, hpProgress(progress, progressUser, from, to, cancelled), cancelled);
+            const auto run = runDense(mix, ref, rate, hpProgress(progress, progressUser, from, to, cancelled), cancelled);
+            ref = run.warped;
+            map = run.map;
         } catch (const std::exception& e) {
             log::clearStatus(1);
             st.fail();
-            if (!autoPick) {
-                log::error(std::string("dense time map: ") + e.what(), log::lastThrowTrace());
-                res.error = std::string("dense time map: ") + e.what();
-                return res;
-            }
-            log::warn("  Auto: the dense time map failed (%s); using Utagoe v3 analysis instead", e.what());
-            fellBack = true;
+            log::error(std::string("dense time map: ") + e.what(), log::lastThrowTrace());
+            res.error = std::string("dense time map: ") + e.what();
+            return res;
         }
         log::clearStatus(1);
         if (cancelled) {
             res.cancelled = true;
             return res;
         }
-        if (fellBack) {
-            if (!alignV3()) {
-                res.cancelled = true;
-                return res;
-            }
-        } else {
-            alignInfo = denseInfo(map, frames, rate);
-            res.alignment.inverted = map.polarity < 0;
-            cfg.alignment = 0;
-            valid.assign(frames, 1);
-            engineFrom = to;
-        }
+        alignInfo = denseInfo(map, frames, rate);
+        res.alignment.inverted = map.polarity < 0;
+        cfg.alignment = 0;
+        valid.assign(frames, 1);
+        engineFrom = to;
     } else if (!alignV3()) {
         res.cancelled = true;
         return res;
@@ -503,141 +607,12 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
     rc::Audio estimate;
     char buf[400];
     bool cancelled = false;
-    log::Stage modelStage(name + (autoPick ? "" : " algorithm") + (autoPick ? "" : alignSuffix(align)));
-    if (multi) {
-        static const std::pair<rc::Method, const char*> rcSet[] = {{rc::Method::Robust, "Robust"}, {rc::Method::Kalman, "Kalman"},
-                                                                    {rc::Method::Hammerstein, "Hammerstein"}};
-        static const int rcRank[] = {0, 2, 3};
-        constexpr int rcCount = 3;
-        const bool stereo = ch == 2;
-        const double units = rcCount + (stereo ? 3.0 : 0.0);
-        const float span = 0.93f - engineFrom;
-        std::vector<Candidate> cands;
-        int robust = -1;
-        for (int i = 0; i < rcCount; ++i) {
-            const float a = engineFrom + span * static_cast<float>(i / units), b = engineFrom + span * static_cast<float>((i + 1) / units);
-            log::detail("  running %s", rcSet[i].second);
-            rc::Result r;
-            try {
-                r = rc::separate(mix, ref, valid, rate, cfg, rcSet[i].first, [&](double f) {
-                    if (progress && !progress(a + (b - a) * static_cast<float>(f), progressUser)) cancelled = true;
-                    return !cancelled;
-                });
-            } catch (const std::exception& e) {
-                r.error = e.what();
-            }
-            if (cancelled) {
-                res.cancelled = true;
-                return res;
-            }
-            if (!r.error.empty()) {
-                log::warn("  %s left out: %s", rcSet[i].second, r.error.c_str());
-                continue;
-            }
-            if (rcSet[i].first == rc::Method::Hammerstein && !r.calibration.nonlinearAccepted) {
-                log::detail("  Hammerstein left out: its nonlinear part was rejected, so it would only repeat Robust");
-                continue;
-            }
-            Candidate cand{rcSet[i].second, subtractAudio(mix, r.estimate), rcRank[i], rcRank[i] >= 0};
-            if (rcSet[i].first == rc::Method::Robust) robust = static_cast<int>(cands.size());
-            cands.push_back(std::move(cand));
-        }
-        if (robust < 0) {
-            modelStage.fail();
-            res.error = name + ": Robust failed, so there is nothing safe to fall back on";
-            return res;
-        }
-        if (stereo) {
-            const float a = engineFrom + span * static_cast<float>(rcCount / units);
-            log::detail("  running Rational, Surface, Trend, CTF and Low-rank");
-            try {
-                hp::Result r = hp::separate(mix, ref, rate, {hp::Method::Rational, hp::Method::Surface, hp::Method::Trend, hp::Method::Ctf, hp::Method::LowRank},
-                                            true, hpProgress(progress, progressUser, a, 0.93f, cancelled));
-                log::clearStatus(1);
-                if (cancelled || r.cancelled) {
-                    res.cancelled = true;
-                    return res;
-                }
-                static const std::pair<hp::Method, int> hpRank[] = {{hp::Method::Rational, 1}, {hp::Method::Trend, 4}, {hp::Method::Surface, 5},
-                                                                    {hp::Method::Ctf, 6}, {hp::Method::LowRank, 7}};
-                for (auto& [m, est] : r.residuals) {
-                    int rank = 0;
-                    for (const auto& [hm, hr] : hpRank)
-                        if (hm == m) rank = hr;
-                    cands.push_back({hp::methodName(m), subtractAudio(mix, est), rank, true});
-                }
-            } catch (const std::exception& e) {
-                log::clearStatus(1);
-                if (cancelled) {
-                    res.cancelled = true;
-                    return res;
-                }
-                log::warn("  Rational, Surface, Trend, CTF and Low-rank left out: %s", e.what());
-            }
-        }
-        if (progress && !progress(0.93f, progressUser)) {
-            res.cancelled = true;
-            return res;
-        }
-
-        std::vector<const rc::Audio*> all;
-        for (const auto& cd : cands) all.push_back(&cd.background);
-        log::detail("  consensus of %zu", all.size());
-        rc::Audio large = consensusOf(mix, all, cands[static_cast<std::size_t>(robust)].background, rate, cfg, kLargeStrength);
-        for (const auto& cd : cands)
-            log::detail("    %-12s %6.1f dB from the consensus", cd.name.c_str(), distanceDb(cd.background, large));
-        if (keepMembers)
-            for (const auto& cd : cands) members.emplace_back(slug(cd.name), bufferOf(subtractAudio(mix, cd.background), rate));
-
-        std::string pickName = "Ensemble Large";
-        if (autoPick) {
-            std::vector<const rc::Audio*> small;
-            for (const auto& cd : cands)
-                if (cd.name == "Robust" || cd.name == "Kalman" || cd.name == "Hammerstein") small.push_back(&cd.background);
-            Candidate smallC{"Ensemble Small", consensusOf(mix, small, cands[static_cast<std::size_t>(robust)].background, rate, cfg, cfg.ensembleStrength), 8, true};
-            Candidate largeC{"Ensemble Large", std::move(large), 9, true};
-            std::vector<Candidate*> pool;
-            for (auto& cd : cands)
-                if (cd.scored) pool.push_back(&cd);
-            pool.push_back(&smallC);
-            pool.push_back(&largeC);
-            Candidate* pick = &smallC;
-            if (stereo) {
-                std::vector<double> scores;
-                double best = std::numeric_limits<double>::infinity();
-                for (Candidate* cd : pool) {
-                    scores.push_back(sideLeftoverDb(mix, cd->background, valid));
-                    best = std::min(best, scores.back());
-                }
-                log::detail("  Auto: backing left in the stereo difference (lower is better)");
-                int bestRank = 1 << 30;
-                for (std::size_t i = 0; i < pool.size(); ++i) {
-                    log::detail("    %-14s %7.2f dB", pool[i]->name.c_str(), scores[i]);
-                    if (scores[i] <= best + kAutoMarginDb && pool[i]->rank < bestRank) {
-                        bestRank = pool[i]->rank;
-                        pick = pool[i];
-                    }
-                }
-            } else {
-                log::detail("  Auto: mono input has no stereo difference to compare by; using Ensemble Small");
-            }
-            log::line("  Auto picked %s", pick->name.c_str());
-            if (keepMembers) {
-                members.emplace_back(slug(smallC.name), bufferOf(subtractAudio(mix, smallC.background), rate));
-                members.emplace_back(slug(largeC.name), bufferOf(subtractAudio(mix, largeC.background), rate));
-            }
-            pickName = pick->name;
-            estimate = subtractAudio(mix, pick->background);
-        } else {
-            estimate = subtractAudio(mix, large);
-        }
-        std::snprintf(buf, sizeof buf, "algorithm:%s%s%s %s candidates:%zu%s", name.c_str(), autoPick ? "->" : "", autoPick ? pickName.c_str() : "",
-                      alignInfo.c_str(), cands.size(), cfg.fitSpans.empty() ? "" : " spans:yes");
-    } else if (algorithm) {
-        const hp::Method method = static_cast<hp::Method>(static_cast<int>(model) - static_cast<int>(WaveModel::Rational));
+    log::Stage modelStage(name + " algorithm" + alignSuffix(align));
+    if (algorithm) {
+        const hp::Method method = model == WaveModel::Surface ? hp::Method::Surface : hp::Method::LowRank;
         hp::Result r;
         try {
-            r = hp::separate(mix, ref, rate, {method}, true, hpProgress(progress, progressUser, engineFrom, 0.97f, cancelled));
+            r = hp::separate(mix, ref, rate, {method}, true, hpProgress(progress, progressUser, engineFrom, 0.97f, cancelled), settings.waveFft);
         } catch (const std::exception& e) {
             log::clearStatus(1);
             modelStage.fail();
@@ -657,7 +632,7 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
                       r.phase.breakHz, r.phase.delay, r.phase.gain);
         estimate = std::move(r.residuals.front().second);
     } else {
-        static const rc::Method methods[] = {rc::Method::Robust, rc::Method::Robust, rc::Method::Kalman, rc::Method::Hammerstein,
+        static const rc::Method methods[] = {rc::Method::Hammerstein, rc::Method::Hammerstein, rc::Method::Kalman, rc::Method::Hammerstein,
                                              rc::Method::Nmf, rc::Method::Spatial, rc::Method::Ensemble};
         const rc::Method method = methods[static_cast<int>(model)];
         RcProgress rp{progress, progressUser, engineFrom, 0.97f};
@@ -679,11 +654,12 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
             res.error = name + ": " + r.error;
             return res;
         }
-        if (cfg.alignment == 1) {
+        if (cfg.alignment == 1 || haveCachedAlign) {
+            const rc::Alignment& al = haveCachedAlign ? cachedAlign : r.alignment;
             std::snprintf(buf, sizeof buf, "align:gcc ofs:%.3f drift:%.3fppm score:%.3f anchors:%d",
-                          -r.alignment.offset, -r.alignment.slope * 1e6, r.alignment.score, r.alignment.anchors);
+                          -al.offset, -al.slope * 1e6, al.score, al.anchors);
             alignInfo = buf;
-            res.alignment.offset = static_cast<int>(std::lround(-r.alignment.offset));
+            res.alignment.offset = static_cast<int>(std::lround(-al.offset));
         }
         std::snprintf(buf, sizeof buf, "algorithm:%s %s calib:%d frames coherence:%.3f%s%s", name.c_str(),
                       alignInfo.c_str(), r.calibration.frames, r.calibration.medianCoherence,
@@ -749,18 +725,18 @@ ExtractResult extractAlignedPair(const AudioBuffer& orig, const AudioBuffer& ins
             res.cancelled = true;
             return res;
         }
-        GccAligned g;
-        std::string err;
-        if (!gccAlign(mix, ref, orig.sampleRate, frames, g, err)) {
+        const auto run = runGcc(mix, ref, orig.sampleRate, frames);
+        if (!run.ok) {
             st.fail();
-            res.error = err;
+            res.error = run.error;
             return res;
         }
         if (progress && !progress(c.progressFrom + (1.0f - c.progressFrom) * 0.6f, progressUser)) {
             res.cancelled = true;
             return res;
         }
-        out = std::move(g.warped.v);
+        const GccAligned& g = run.g;
+        out = g.warped.v;
         for (char v : g.valid) covered += v ? 1 : 0;
         res.alignment.offset = static_cast<int>(std::lround(-g.a.offset));
         res.alignment.inverted = g.inverted;
@@ -783,8 +759,9 @@ ExtractResult extractAlignedPair(const AudioBuffer& orig, const AudioBuffer& ins
         hp::TimeMap map;
         rc::Audio warped;
         try {
-            warped = hp::alignDense(mix, ref, orig.sampleRate, map,
-                                    hpProgress(progress, progressUser, c.progressFrom, 0.97f, cancelled), cancelled);
+            const auto run = runDense(mix, ref, orig.sampleRate, hpProgress(progress, progressUser, c.progressFrom, 0.97f, cancelled), cancelled);
+            warped = run.warped;
+            map = run.map;
         } catch (const std::exception& e) {
             log::clearStatus(1);
             st.fail();
@@ -852,211 +829,8 @@ void alignedPairPaths(const std::string& output, std::string& mainPath, std::str
     instPath = stem + "_inst" + ext;
 }
 
-void outputPaths(const std::string& output, OutputKind kind, std::string& first, std::string& second) {
-    if (kind != OutputKind::CenterSides && kind != OutputKind::Repeats && kind != OutputKind::Upmix) {
-        alignedPairPaths(output, first, second);
-        return;
-    }
-    const std::size_t slash = output.find_last_of("/\\");
-    const std::size_t dot = output.find_last_of('.');
-    const bool hasExt = dot != std::string::npos && (slash == std::string::npos || dot > slash);
-    const std::string stem = hasExt ? output.substr(0, dot) : output;
-    const std::string ext = hasExt ? output.substr(dot) : "";
-    if (kind == OutputKind::Upmix) {
-        std::string lower = ext;
-        for (char& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-        const bool multichannel = lower == ".wav" || lower == ".flac" || lower == ".aiff" || lower == ".aif";
-        first = second = stem + "_upmix" + (multichannel ? ext : std::string(".wav"));
-        return;
-    }
-    if (kind == OutputKind::Repeats) {
-        first = stem + "_repeats";
-        second = first + (slash == std::string::npos ? std::string("/") : output.substr(slash, 1)) + "repeats.csv";
-        return;
-    }
-    first = stem + "_centre" + ext;
-    second = stem + "_sides" + ext;
-}
-
-ExtractResult extractCenterSides(const AudioBuffer& original, const Settings& settings, ProgressFn progress, void* progressUser) {
-    ExtractResult res;
-    if (original.frames() == 0) {
-        res.error = "the original input is empty";
-        return res;
-    }
-    if (original.channels < 2) {
-        res.error = "Centre + sides needs a stereo file";
-        return res;
-    }
-    const cs::Method method = static_cast<cs::Method>(std::clamp(settings.centerMethod, 0, cs::kMethods - 1));
-    const std::size_t frames = original.frames();
-    const int ch = original.channels;
-    std::vector<float> x(frames * 2);
-    for (std::size_t i = 0; i < frames; ++i) {
-        x[2 * i] = original.samples[i * static_cast<std::size_t>(ch)];
-        x[2 * i + 1] = original.samples[i * static_cast<std::size_t>(ch) + 1];
-    }
-    if (ch > 2) log::detail("  using the first two of %d channels", ch);
-    log::Stage st(std::string("centre + sides (") + cs::methodName(method) + ")");
-    bool cancelled = false;
-    const cs::Split s = cs::centerOf(x, original.sampleRate, method, [&](double f) {
-        log::status(1, false, "  %s", log::progressBar(f).c_str());
-        if (progress && !progress(static_cast<float>(f), progressUser)) cancelled = true;
-        return !cancelled;
-    });
-    log::clearStatus(1);
-    if (cancelled || s.cancelled) {
-        res.cancelled = true;
-        return res;
-    }
-    res.vocal.sampleRate = res.alignedInst.sampleRate = original.sampleRate;
-    res.vocal.channels = res.alignedInst.channels = 2;
-    res.vocal.samples.resize(frames * 2);
-    res.alignedInst.samples.resize(frames * 2);
-    double ce = 0.0, se = 0.0, te = 0.0;
-    for (std::size_t i = 0; i < frames; ++i) {
-        const double c = s.center[i];
-        res.vocal.samples[2 * i] = res.vocal.samples[2 * i + 1] = static_cast<float>(c);
-        for (int k = 0; k < 2; ++k) {
-            const double v = x[2 * i + static_cast<std::size_t>(k)];
-            res.alignedInst.samples[2 * i + static_cast<std::size_t>(k)] = static_cast<float>(v - c);
-            ce += c * c;
-            se += (v - c) * (v - c);
-            te += v * v;
-        }
-    }
-    auto db = [&](double e) { return 10.0 * std::log10((e + 1e-30) / (te + 1e-30)); };
-    log::detail("  centre %.1f dB, sides %.1f dB of the original, mask mean %.3f", db(ce), db(se), s.maskMean);
-    char buf[160];
-    std::snprintf(buf, sizeof buf, "centre/sides:%s centre:%.1fdB sides:%.1fdB mask:%.3f", cs::methodName(method), db(ce), db(se), s.maskMean);
-    res.alignment.model = buf;
-    if (progress) progress(1.0f, progressUser);
-    return res;
-}
-
-namespace {
-
-std::string clockLabel(double seconds) {
-    const double s = std::max(0.0, seconds);
-    const int m = static_cast<int>(s / 60);
-    char buf[32];
-    std::snprintf(buf, sizeof buf, "%dm%05.2fs", m, s - 60.0 * m);
-    return buf;
-}
-
-AudioBuffer toBuffer(const rp::Audio& a, int sr) {
-    AudioBuffer b;
-    b.sampleRate = sr;
-    b.channels = a.channels;
-    b.samples.resize(a.v.size());
-    for (std::size_t i = 0; i < a.v.size(); ++i) b.samples[i] = static_cast<float>(a.v[i]);
-    return b;
-}
-
-}
-
-RepeatsResult extractRepeats(const AudioBuffer& original, const Settings& settings, const std::function<bool(RepeatClip&)>& sink,
-                             ProgressFn progress, void* progressUser) {
-    RepeatsResult res;
-    if (original.frames() == 0) {
-        res.error = "the original input is empty";
-        return res;
-    }
-    const int sr = original.sampleRate;
-    const int ch = std::min(original.channels, 2);
-    const std::size_t frames = original.frames();
-    rp::Audio a;
-    a.channels = ch;
-    a.v.resize(frames * static_cast<std::size_t>(ch));
-    for (std::size_t i = 0; i < frames; ++i)
-        for (int c = 0; c < ch; ++c) a.at(i, c) = original.samples[i * static_cast<std::size_t>(original.channels) + static_cast<std::size_t>(c)];
-    if (original.channels > 2) log::detail("  using the first two of %d channels", original.channels);
-    rp::Config cfg;
-    static const char* guides[] = {"auto", "full", "side"};
-    cfg.guide = guides[std::clamp(settings.repeatGuide, 0, 2)];
-    if (ch < 2 && cfg.guide == "side") cfg.guide = "full";
-    if (settings.repeatBreadth == 1) {
-        cfg.maxMatches = 400;
-        cfg.renderLimit = 120;
-    }
-    log::Stage st("repeats (" + cfg.guide + (settings.repeatBreadth == 1 ? ", broad" : "") + ")");
-    bool cancelled = false, failed = false;
-    int passed = 0;
-    auto report = [&](double f, const std::string&) {
-        log::status(1, false, "  %s", log::progressBar(f).c_str());
-        if (failed || (progress && !progress(static_cast<float>(f), progressUser))) cancelled = true;
-        return !cancelled;
-    };
-    auto emit = [&](RepeatClip& clip) {
-        if (clip.passed) {
-            ++passed;
-            char num[16];
-            std::snprintf(num, sizeof num, "%02d_", passed);
-            clip.name = num + clip.name;
-            if (!failed && sink && !sink(clip)) failed = true;
-        }
-        clip.shared = AudioBuffer();
-        clip.difference = AudioBuffer();
-        res.clips.push_back(std::move(clip));
-    };
-    rp::Outcome o;
-    try {
-        o = rp::run(a, sr, cfg, report,
-                    [&](const rp::Match& m, rp::Extraction& x) {
-                        RepeatClip c;
-                        c.name = clockLabel(m.target) + "_from_" + clockLabel(m.source);
-                        c.status = x.status;
-                        c.quality = x.quality;
-                        c.guide = x.guide;
-                        c.source = m.source;
-                        c.target = m.target;
-                        c.duration = static_cast<double>(x.target.frames()) / sr;
-                        c.reductionDb = x.heldOut.reductionDb;
-                        c.correlation = x.heldOut.correlation;
-                        c.delayMs = x.delaySamples * 1000.0 / sr;
-                        c.ratePpm = x.ratePpm;
-                        c.passed = x.status == "validated_contrast" || x.status == "near_null_repeat";
-                        if (c.passed) {
-                            c.shared = toBuffer(x.shared, sr);
-                            c.difference = toBuffer(x.residual, sr);
-                        }
-                        emit(c);
-                    },
-                    [&](rp::JointResult& j) {
-                        RepeatClip c;
-                        c.joint = true;
-                        c.name = clockLabel(j.targetStart) + "_joint";
-                        for (const std::string& s : j.sources) c.name += "_" + s.substr(6);
-                        c.status = j.accepted ? "validated_joint_contrast" : "joint_not_demonstrably_better";
-                        c.quality = j.accepted ? "joint" : "not_verified";
-                        c.target = j.targetStart;
-                        c.duration = j.duration;
-                        c.reductionDb = j.heldOut.reductionDb;
-                        c.correlation = j.heldOut.correlation;
-                        c.passed = j.accepted;
-                        if (c.passed) {
-                            c.shared = toBuffer(j.shared, sr);
-                            c.difference = toBuffer(j.residual, sr);
-                        }
-                        emit(c);
-                    });
-    } catch (const std::exception& e) {
-        log::clearStatus(1);
-        if (failed) return res;
-        res.error = std::string("repeat search failed: ") + e.what();
-        return res;
-    }
-    log::clearStatus(1);
-    if (failed) return res;
-    if (o.cancelled || cancelled) {
-        res.cancelled = true;
-        return res;
-    }
-    res.regions = static_cast<int>(o.matches.size());
-    for (const std::string& e : o.errors) log::detail("  skipped %s", e.c_str());
-    log::detail("  %d regions checked, %d passed the cancellation test", res.regions, passed);
-    if (progress) progress(1.0f, progressUser);
-    return res;
+void outputPaths(const std::string& output, OutputKind, std::string& first, std::string& second) {
+    alignedPairPaths(output, first, second);
 }
 
 namespace {
@@ -1126,6 +900,7 @@ ExtractResult extract(const AudioBuffer& original,
                       const AudioInfo* instrumentalInfo) {
     const X87Extended fpu;
     ExtractResult res;
+    gpu::allow(settings.useGpu);
     res.instrumentalRateIn = instrumentalIn.sampleRate;
     res.instrumentalChannelsIn = instrumentalIn.channels;
 
@@ -1153,8 +928,26 @@ ExtractResult extract(const AudioBuffer& original,
                       instrumentalIn.sampleRate, instrumentalIn.channels, rate, ch);
         log::Stage ls(what);
         Stage st{progress, progressUser, 0.0f, 0.10f, true};
-        instConformed = conformAudio(instrumentalIn, rate, ch, &stageTrampoline, &st);
-        log::clearStatus(3);
+        std::string k;
+        bool hit = false;
+        if (stepcache::enabled()) {
+            k = stepcache::key("conform", {stepcache::hash(instrumentalIn.samples), u(instrumentalIn.sampleRate), u(instrumentalIn.channels), u(rate), u(ch)});
+            stepcache::Reader in;
+            if (stepcache::load("conform", stepcache::Source::Instrumental, k, in)) {
+                instConformed = readBuffer(in);
+                hit = in.ok() && instConformed.frames() > 0;
+                if (hit) reused();
+            }
+        }
+        if (!hit) {
+            instConformed = conformAudio(instrumentalIn, rate, ch, &stageTrampoline, &st);
+            log::clearStatus(3);
+            if (!k.empty() && instConformed.frames() > 0) {
+                stepcache::Writer out;
+                writeBuffer(out, instConformed);
+                stepcache::save("conform", stepcache::Source::Instrumental, k, out);
+            }
+        }
         if (instConformed.frames() == 0) {
             res.cancelled = true;
             return res;
@@ -1166,7 +959,33 @@ ExtractResult extract(const AudioBuffer& original,
     const AudioBuffer* origPtr = &orig;
     if (settings.matchBandwidth && settings.outputKind == OutputKind::Vocal) {
         log::Stage ls("match lowest bandwidth");
-        const bw::Worse w = matchBandwidth(orig, *instPtr, originalInfo, instrumentalInfo, matched);
+        std::string k;
+        bool hit = false;
+        bw::Worse w = bw::Worse::None;
+        if (stepcache::enabled()) {
+            auto describeInfo = [](const AudioInfo* i) {
+                return i ? i->codec + "/" + std::to_string(i->sampleRate) + "/" + std::to_string(i->bitrateKbps) + "/" + (i->lossless ? "1" : "0") : std::string("-");
+            };
+            k = stepcache::key("bandwidth", {stepcache::hash(orig.samples), stepcache::hash(instPtr->samples), u(ch), u(rate)},
+                               describeInfo(originalInfo) + "|" + describeInfo(instrumentalInfo));
+            stepcache::Reader in;
+            if (stepcache::load("bandwidth", stepcache::Source::Original, k, in)) {
+                w = static_cast<bw::Worse>(in.i64());
+                matched = readBuffer(in);
+                hit = in.ok();
+                if (hit) reused();
+            }
+        }
+        if (!hit) {
+            matched = AudioBuffer{};
+            w = matchBandwidth(orig, *instPtr, originalInfo, instrumentalInfo, matched);
+            if (!k.empty()) {
+                stepcache::Writer out;
+                out.i64(static_cast<long long>(w));
+                writeBuffer(out, w == bw::Worse::None ? AudioBuffer{} : matched);
+                stepcache::save("bandwidth", stepcache::Source::Original, k, out);
+            }
+        }
         if (w == bw::Worse::Original) instPtr = &matched;
         else if (w == bw::Worse::Instrumental) origPtr = &matched;
     }
@@ -1188,20 +1007,18 @@ ExtractResult extract(const AudioBuffer& original,
             bool ok = true;
             if (dense) {
                 try {
-                    hp::TimeMap map;
-                    refA = hp::alignDense(mixA, refA, rate, map, hpProgress(progress, progressUser, 0.0f, 0.1f, cancelled), cancelled);
+                    refA = runDense(mixA, refA, rate, hpProgress(progress, progressUser, 0.0f, 0.1f, cancelled), cancelled).warped;
                 } catch (const std::exception& e) {
                     log::warn("  dense time map failed (%s); using Utagoe v3 analysis", e.what());
                     ok = false;
                 }
                 log::clearStatus(1);
             } else {
-                GccAligned g;
-                std::string err;
-                if (gccAlign(mixA, refA, rate, src.frames(), g, err)) {
-                    refA = std::move(g.warped);
+                const auto run = runGcc(mixA, refA, rate, src.frames());
+                if (run.ok) {
+                    refA = run.g.warped;
                 } else {
-                    log::warn("  cross-correlation alignment failed (%s); using Utagoe v3 analysis", err.c_str());
+                    log::warn("  cross-correlation alignment failed (%s); using Utagoe v3 analysis", run.error.c_str());
                     ok = false;
                 }
             }
@@ -1220,6 +1037,7 @@ ExtractResult extract(const AudioBuffer& original,
     }
 
     AudioBuffer lowMatched;
+    std::string cachedReason;
     const AudioBuffer* instBeforeLowEnd = instPtr;
     float lowTo = -1.0f;
     const bool cutSubsonic = settings.removeSubsonic && settings.outputKind == OutputKind::Vocal;
@@ -1230,9 +1048,62 @@ ExtractResult extract(const AudioBuffer& original,
         const float lowFrom = conform ? 0.10f : 0.0f;
         lowTo = lowFrom + 0.15f;
         Stage st{progress, progressUser, lowFrom, lowTo, true};
-        const lowend::Report lr = lowend::match(src.samples, instPtr->samples, ch, rate, lowMatched.samples,
-                                                [&](double f) { return st.report(static_cast<float>(f)); });
-        log::clearStatus(3);
+        std::string k;
+        bool hit = false;
+        lowend::Report lr;
+        if (stepcache::enabled()) {
+            k = stepcache::key("lowend", {stepcache::hash(src.samples), stepcache::hash(instPtr->samples), u(ch), u(rate)});
+            stepcache::Reader in;
+            if (stepcache::load("lowend", stepcache::Source::Original, k, in)) {
+                lr.applied = in.i64() != 0;
+                lr.segments = static_cast<int>(in.i64());
+                lr.lagSamples = in.f64();
+                lr.driftPpm = in.f64();
+                lr.phase30 = in.f64();
+                lr.phase60 = in.f64();
+                lr.phase100 = in.f64();
+                lr.phase200 = in.f64();
+                lr.gain30Db = in.f64();
+                lr.gain60Db = in.f64();
+                lr.gain100Db = in.f64();
+                lr.predictedLeakDb = in.f64();
+                lr.rode = in.i64() != 0;
+                lr.ride5Db = in.f64();
+                lr.ride95Db = in.f64();
+                cachedReason = in.str();
+                lr.reason = cachedReason.c_str();
+                lowMatched.samples = in.floats();
+                hit = in.ok();
+                if (hit) reused();
+            }
+        }
+        if (!hit) {
+            lowMatched.samples.clear();
+            lr = lowend::match(src.samples, instPtr->samples, ch, rate, lowMatched.samples,
+                               [&](double f) { return st.report(static_cast<float>(f)); });
+            log::clearStatus(3);
+            if (!k.empty() && !lr.cancelled) {
+                stepcache::Writer out;
+                out.i64(lr.applied);
+                out.i64(lr.segments);
+                out.f64(lr.lagSamples);
+                out.f64(lr.driftPpm);
+                out.f64(lr.phase30);
+                out.f64(lr.phase60);
+                out.f64(lr.phase100);
+                out.f64(lr.phase200);
+                out.f64(lr.gain30Db);
+                out.f64(lr.gain60Db);
+                out.f64(lr.gain100Db);
+                out.f64(lr.predictedLeakDb);
+                out.i64(lr.rode);
+                out.f64(lr.ride5Db);
+                out.f64(lr.ride95Db);
+                out.str(lr.reason ? lr.reason : "");
+                out.floats(lr.applied ? lowMatched.samples : std::vector<float>{});
+                stepcache::save("lowend", stepcache::Source::Original, k, out);
+            }
+        }
         if (lr.cancelled) {
             res.cancelled = true;
             return res;
@@ -1322,148 +1193,6 @@ ExtractResult extract(const AudioBuffer& original,
     finishOutput(c, src, res);
     finish(res);
     if (res.cancelled) return res;
-    if (progress) progress(1.0f, progressUser);
-    return res;
-}
-
-ExtractResult extractUpmix(const AudioBuffer& original, const AudioBuffer* instrumental, const Settings& settings, ProgressFn progress,
-                           void* progressUser, const AudioInfo* originalInfo, const AudioInfo* instrumentalInfo) {
-    ExtractResult res;
-    if (original.frames() == 0) {
-        res.error = "the original input is empty";
-        return res;
-    }
-    const upmix::Method m = static_cast<upmix::Method>(std::clamp(settings.upmixMethod, 0, upmix::kMethods - 1));
-    const char* name = upmix::methodName(m);
-    if (upmix::needsReference(m) && (!instrumental || instrumental->frames() == 0)) {
-        res.error = std::string("Upmix / ") + name + " needs the instrumental";
-        return res;
-    }
-    const bool seven = settings.upmixSevenOne && upmix::supportsSevenOne(m);
-    if (settings.upmixSevenOne && !seven) log::detail("  %s renders 5.1 only", name);
-    const AudioBuffer stereo = original.channels == 2 ? original : conformAudio(original, original.sampleRate, 2);
-    const int sr = stereo.sampleRate;
-    const std::vector<double> x(stereo.samples.begin(), stereo.samples.end());
-    log::Stage st(std::string("upmix (") + name + (seven ? ", 7.1)" : ", 5.1)"));
-    bool cancelled = false;
-    float from = 0.0f;
-    Stage phase{progress, progressUser, 0.0f, 1.0f, true};
-    auto report = [&](double f) {
-        phase.from = from;
-        if (!phase.report(static_cast<float>(f))) cancelled = true;
-        return !cancelled;
-    };
-    upmix::Multi out;
-    try {
-        if (m == upmix::Method::GuidedScene || m == upmix::Method::ContrastCov || m == upmix::Method::ModulationLock || m == upmix::Method::VocalAnchor) {
-            const bool anchor = m == upmix::Method::VocalAnchor;
-            const float alignEnd = anchor ? 0.25f : 0.3f;
-            const AudioBuffer inst = instrumental->sampleRate == sr && instrumental->channels == 2 ? *instrumental : conformAudio(*instrumental, sr, 2);
-            rc::Audio mix, ref;
-            mix.channels = ref.channels = 2;
-            mix.v = stereo.samples;
-            ref.v = inst.samples;
-            const std::size_t frames = stereo.frames();
-            rc::Audio aligned;
-            try {
-                hp::TimeMap map;
-                aligned = hp::alignDense(mix, ref, sr, map, hpProgress(progress, progressUser, 0.0f, alignEnd, cancelled), cancelled);
-                log::detail("  instrumental lined up with the dense time map");
-            } catch (const std::exception& e) {
-                log::detail("  dense time map unavailable (%s); using cross-correlation", e.what());
-                GccAligned g;
-                std::string err;
-                if (!gccAlign(mix, ref, sr, frames, g, err)) {
-                    res.error = err;
-                    return res;
-                }
-                aligned = std::move(g.warped);
-            }
-            if (cancelled) {
-                res.cancelled = true;
-                return res;
-            }
-            std::vector<double> r(aligned.v.begin(), aligned.v.end());
-            r.resize(x.size(), 0.0);
-            std::vector<double> vocal;
-            if (anchor) {
-                Settings vocalSettings = settings;
-                vocalSettings.outputKind = OutputKind::Vocal;
-                Stage sub{progress, progressUser, alignEnd, 0.65f, false};
-                const ExtractResult v = extract(original, *instrumental, vocalSettings, false, progress ? &stageTrampoline : nullptr, progress ? &sub : nullptr,
-                                                originalInfo, instrumentalInfo);
-                if (v.cancelled) {
-                    res.cancelled = true;
-                    return res;
-                }
-                if (!v) {
-                    res.error = v.error;
-                    return res;
-                }
-                const AudioBuffer voc = v.vocal.channels == 2 && v.vocal.sampleRate == sr ? v.vocal : conformAudio(v.vocal, sr, 2);
-                vocal.assign(x.size(), 0.0);
-                for (std::size_t i = 0; i < x.size() && i < voc.samples.size(); ++i) vocal[i] = voc.samples[i];
-                log::detail("  vocal from %s anchors the centre; its wide parts join the instrumental in the surrounds",
-                            settings.mergeMode == MergeMode::ByWaveform ? modelName(settings.waveModel) : "Frequency");
-            }
-            from = anchor ? 0.65f : 0.3f;
-            out = upmix::specField(x, sr, m, &r, settings.upmixLfe, report, cancelled, anchor ? &vocal : nullptr);
-        } else if (m == upmix::Method::ReferenceScene) {
-            Settings vocalSettings = settings;
-            vocalSettings.outputKind = OutputKind::Vocal;
-            Stage sub{progress, progressUser, 0.0f, 0.7f, false};
-            const ExtractResult v = extract(original, *instrumental, vocalSettings, false, progress ? &stageTrampoline : nullptr, progress ? &sub : nullptr,
-                                            originalInfo, instrumentalInfo);
-            if (v.cancelled) {
-                res.cancelled = true;
-                return res;
-            }
-            if (!v) {
-                res.error = v.error;
-                return res;
-            }
-            const AudioBuffer voc = v.vocal.channels == 2 ? v.vocal : conformAudio(v.vocal, sr, 2);
-            std::vector<double> novel(x.size(), 0.0), bed(x.size(), 0.0);
-            for (std::size_t i = 0; i < x.size(); ++i) {
-                novel[i] = i < voc.samples.size() ? voc.samples[i] : 0.0;
-                bed[i] = x[i] - novel[i];
-            }
-            log::detail("  vocal from %s, kept up front; the rest of the mix fills the field", settings.mergeMode == MergeMode::ByWaveform ? modelName(settings.waveModel) : "Frequency");
-            from = 0.7f;
-            out = upmix::referenceScene(bed, novel, sr, seven, settings.upmixLfe, report, cancelled);
-        } else if (m == upmix::Method::SceneVector) {
-            out = upmix::sceneVector(x, sr, seven, 290.0, 0.45, settings.upmixLfe, report, cancelled);
-        } else {
-            out = upmix::specField(x, sr, m, nullptr, settings.upmixLfe, report, cancelled);
-        }
-    } catch (const std::exception& e) {
-        log::clearStatus(3);
-        st.fail();
-        res.error = std::string("Upmix / ") + name + ": " + e.what();
-        return res;
-    }
-    log::clearStatus(3);
-    if (cancelled) {
-        res.cancelled = true;
-        return res;
-    }
-    res.vocal.sampleRate = sr;
-    res.vocal.channels = out.channels;
-    res.vocal.samples.resize(out.v.size());
-    for (std::size_t i = 0; i < out.v.size(); ++i) res.vocal.samples[i] = static_cast<float>(out.v[i]);
-    std::string levels;
-    const std::size_t frames = out.v.size() / static_cast<std::size_t>(std::max(1, out.channels));
-    for (int c = 0; c < out.channels; ++c) {
-        double e = 0;
-        for (std::size_t i = 0; i < frames; ++i) e += out.v[i * static_cast<std::size_t>(out.channels) + static_cast<std::size_t>(c)] * out.v[i * static_cast<std::size_t>(out.channels) + static_cast<std::size_t>(c)];
-        char b[48];
-        std::snprintf(b, sizeof b, "%s%s %.1f", c ? ", " : "", out.names[static_cast<std::size_t>(c)].c_str(), 10.0 * std::log10(e / std::max<std::size_t>(1, frames) + 1e-30));
-        levels += b;
-    }
-    log::detail("  channel levels (dBFS): %s", levels.c_str());
-    char buf[160];
-    std::snprintf(buf, sizeof buf, "upmix:%s layout:%s lfe:%d", name, seven ? "7.1" : "5.1", settings.upmixLfe ? 1 : 0);
-    res.alignment.model = buf;
     if (progress) progress(1.0f, progressUser);
     return res;
 }

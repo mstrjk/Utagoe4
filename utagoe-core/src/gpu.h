@@ -6,6 +6,7 @@
 #ifndef UTAGOE_GPU_H
 #define UTAGOE_GPU_H
 
+#include <complex>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -48,6 +49,21 @@ bool centralizeFrames(const float* lineL, const float* lineR, int frames, int n,
 
 // FIR 畳み込み。out[i] = sum_j x[taps-1+i-j] * h[j] (x は遅延線 taps-1 個 + 入力 count 個)。
 bool firConvolve(const float* x, int count, const float* h, int taps, float* out);
+
+void allow(bool on);
+bool fftBatch(std::complex<double>* const* arrays, int count, int n, bool inverse, const std::complex<double>* table);
+bool allowed();
+
+struct AnchorSetup {
+    int len = 0, n = 0, m = 0, half = 0, lags = 0, lagStart = 0, bigN = 0;
+    const std::complex<double>* chirp = nullptr;
+    const std::complex<double>* kernel = nullptr;
+    const std::complex<double>* twForward = nullptr;
+    const std::complex<double>* twInverse = nullptr;
+    const std::complex<double>* lagTwiddle = nullptr;
+};
+bool anchorScan(const AnchorSetup& s, const std::vector<const double*>& ys, const std::vector<const double*>& xs,
+                std::vector<double>& acc, std::vector<double>& c0);
 
 }
 }

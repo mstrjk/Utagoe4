@@ -2,6 +2,7 @@
 // 成功したら少し待って閉じ、導入先の Utagoe を起動する。失敗したら原因と stack trace を残して開いたままにする。
 
 using Utagoe.App;
+using Utagoe.Ui;
 
 namespace Utagoe.Forms;
 
@@ -11,9 +12,8 @@ internal sealed class InstallForm : XpTerminalWindow
 
     public string? InstalledExe { get; private set; }
 
-    public InstallForm()
+    public InstallForm() : base(Template(() => L.T("Utagoe Setup"), Placement.CenterScreen))
     {
-        Text = L.T("Utagoe Setup");
         Heading = "Setting up Utagoe";
         Subheading = "One-time setup, no admin rights needed.";
         ClientSize = new Size(640, 340);

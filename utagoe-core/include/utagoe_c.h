@@ -70,7 +70,7 @@ typedef struct UtagoeSettings {
     int32_t gpuMode;
     int32_t gpuNoticeHidden;
 
-    // By Waveform の代替モデル。waveModel: 0 v3, 1 Robust, 2 Kalman, 3 Hammerstein, 4 NMF, 5 Spatial, 6 Ensemble。
+    // By Waveform の代替モデル。waveModel: 0 v3, 1 Robust, 2 Kalman, 4 NMF, 5 Spatial, 6 Ensemble, 8 Surface, 11 Low-rank。
     // waveAlign: 0 v3 の block 位置合わせ, 1 GCC。fitSpans: 声の無い区間 (例 "0-10, 2:00-2:08")。
     int32_t waveModel;
     int32_t waveAlign;
@@ -85,20 +85,11 @@ typedef struct UtagoeSettings {
     // app icon の色違いの名前 (UTF-8、例 "standard")。UI が使う。
     char    appIcon[UTAGOE_NAME_MAX];
 
-    int32_t centerMethod;
-
     char    uiLanguage[UTAGOE_NAME_MAX];
-
-    int32_t repeatGuide;
-    int32_t repeatBreadth;
 
     int32_t overwriteOutput;
 
     int32_t matchBandwidth;
-
-    int32_t upmixMethod;
-    int32_t upmixSevenOne;
-    int32_t upmixLfe;
 
     int32_t normalizeOutput;
 
@@ -106,6 +97,8 @@ typedef struct UtagoeSettings {
     int32_t removeSubsonic;
     int32_t freqModel;
     int32_t saveMask;
+    int32_t waveFft;
+    int32_t cacheSteps;
 } UtagoeSettings;
 
 // debug には元実装のデバッグ表示と同じ形式の行を入れる。
@@ -170,7 +163,6 @@ UTAGOE_API int32_t UTAGOE_CALL utagoe_extract_file(
 
 // outputKind = 1 のときに書く 2 つの path。len は各 buffer の大きさ (byte)。
 UTAGOE_API void UTAGOE_CALL utagoe_aligned_pair_paths(const char* outputPath, char* mainBuf, char* instBuf, int32_t len);
-UTAGOE_API void UTAGOE_CALL utagoe_output_paths(const char* outputPath, int32_t kind, char* firstBuf, char* secondBuf, int32_t len);
 
 // 形式情報だけを読む。音声全体は展開しない (MP3 は長さを数えるため全体を走査する)。
 UTAGOE_API int32_t UTAGOE_CALL utagoe_probe_audio(const char* path, UtagoeAudioInfo* info,
@@ -214,6 +206,7 @@ UTAGOE_API void UTAGOE_CALL utagoe_set_log(UtagoeLog fn, void* user);
 
 // crash 記録 (この DLL 群の中のアクセス違反など) を書く folder。UTF-8。
 UTAGOE_API void UTAGOE_CALL utagoe_set_log_dir(const char* dir);
+UTAGOE_API void UTAGOE_CALL utagoe_clear_step_cache(void);
 
 // build と同梱ライブラリの版。複数行の UTF-8。
 UTAGOE_API const char* UTAGOE_CALL utagoe_build_info(void);

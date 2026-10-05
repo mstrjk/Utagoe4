@@ -32,11 +32,13 @@ internal static class AppIcons
     public static void Apply(string name, bool updateShell)
     {
         Current = Normalize(name);
+        var swap = Utagoe.Ui.Transition.Begin(Utagoe.Ui.Transition.OpenWindows());
         // icon の色違いと theme は 1 対 1。
         Theme.Set(Current);
         Icon icon = CurrentIcon;
         foreach (Form f in Application.OpenForms.Cast<Form>().ToList())
             if (f.ShowIcon && f.TopLevel) f.Icon = icon;
+        swap.End(fade: false);
         if (updateShell) UpdateShortcut();
     }
 
@@ -60,19 +62,47 @@ internal static class AppIcons
     private static Bitmap Source(string name)
     {
         if (Sources.TryGetValue(name, out var bmp)) return bmp;
-        return Sources[name] = Vcl.VclGlyph.AppIconArt(name);
+        return Sources[name] = Ui.Art.AppIconArt(name);
+    }
+
+    private static int[] Pixels(Bitmap b)
+    {
+        var rect = new Rectangle(0, 0, b.Width, b.Height);
+        var data = b.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        try
+        {
+            var px = new int[b.Width * b.Height];
+            for (int y = 0; y < b.Height; y++)
+                System.Runtime.InteropServices.Marshal.Copy(data.Scan0 + y * data.Stride, px, y * b.Width, b.Width);
+            return px;
+        }
+        finally { b.UnlockBits(data); }
+    }
+
+    private static Bitmap FromPixels(int[] px, int size)
+    {
+        var b = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        var data = b.LockBits(new Rectangle(0, 0, size, size), System.Drawing.Imaging.ImageLockMode.WriteOnly, b.PixelFormat);
+        try
+        {
+            for (int y = 0; y < size; y++)
+                System.Runtime.InteropServices.Marshal.Copy(px, y * size, data.Scan0 + y * data.Stride, size);
+        }
+        finally { b.UnlockBits(data); }
+        return b;
     }
 
     private static Bitmap Scale(Bitmap src, int size)
     {
         int n = src.Width;
-        var b = new Bitmap(size, size, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+        int[] from = Pixels(src);
+        var to = new int[size * size];
         if (size >= n)
         {
             for (int y = 0; y < size; y++)
                 for (int x = 0; x < size; x++)
-                    b.SetPixel(x, y, src.GetPixel(x * n / size, y * n / size));
-            return b;
+                    to[y * size + x] = from[(y * n / size) * n + x * n / size];
+            return FromPixels(to, size);
         }
         double f = (double)n / size;
         for (int y = 0; y < size; y++)
@@ -84,14 +114,15 @@ internal static class AppIcons
                     {
                         double w = (Math.Min(x1, sx + 1) - Math.Max(x0, sx)) * (Math.Min(y1, sy + 1) - Math.Max(y0, sy));
                         if (w <= 0) continue;
-                        Color c = src.GetPixel(sx, sy);
-                        double wa = w * c.A / 255.0;
-                        r += c.R * wa; g += c.G * wa; bl += c.B * wa; a += wa; area += w;
+                        int c = from[sy * n + sx];
+                        int ca = (c >> 24) & 255, cr = (c >> 16) & 255, cg = (c >> 8) & 255, cb = c & 255;
+                        double wa = w * ca / 255.0;
+                        r += cr * wa; g += cg * wa; bl += cb * wa; a += wa; area += w;
                     }
-                b.SetPixel(x, y, a <= 0 ? Color.Transparent
-                    : Color.FromArgb((int)Math.Round(255 * a / area), (int)Math.Round(r / a), (int)Math.Round(g / a), (int)Math.Round(bl / a)));
+                to[y * size + x] = a <= 0 ? Color.Transparent.ToArgb()
+                    : Color.FromArgb((int)Math.Round(255 * a / area), (int)Math.Round(r / a), (int)Math.Round(g / a), (int)Math.Round(bl / a)).ToArgb();
             }
-        return b;
+        return FromPixels(to, size);
     }
 
 
@@ -118,16 +149,17 @@ internal static class AppIcons
     private static byte[] Dib(Bitmap b)
     {
         int n = b.Width, maskStride = (n + 31) / 32 * 4;
+        int[] px = Pixels(b);
         using var ms = new MemoryStream();
         using var w = new BinaryWriter(ms);
         w.Write(40); w.Write(n); w.Write(n * 2); w.Write((short)1); w.Write((short)32);
         w.Write(0); w.Write(n * n * 4 + maskStride * n); w.Write(0); w.Write(0); w.Write(0); w.Write(0);
         for (int y = n - 1; y >= 0; y--)
-            for (int x = 0; x < n; x++) { Color c = b.GetPixel(x, y); w.Write(c.B); w.Write(c.G); w.Write(c.R); w.Write(c.A); }
+            for (int x = 0; x < n; x++) w.Write(px[y * n + x]);
         for (int y = n - 1; y >= 0; y--)
         {
             var row = new byte[maskStride];
-            for (int x = 0; x < n; x++) if (b.GetPixel(x, y).A < 128) row[x >> 3] |= (byte)(0x80 >> (x & 7));
+            for (int x = 0; x < n; x++) if (((px[y * n + x] >> 24) & 255) < 128) row[x >> 3] |= (byte)(0x80 >> (x & 7));
             w.Write(row);
         }
         w.Flush();

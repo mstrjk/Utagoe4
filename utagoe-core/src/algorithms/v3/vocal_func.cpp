@@ -4,6 +4,7 @@
 // 左右を bin ごとに比較し、位相が近い bin (中央に定位する成分) を残し、違う bin を抑える。単純な M/S ではなく phase-coherence gate。
 
 #include "vocal_func.h"
+#include "mathconst.h"
 #include "x87.h"
 #include "parallel.h"
 #include "gpu.h"
@@ -15,12 +16,12 @@
 namespace utagoe {
 namespace {
 
-constexpr float kPi = 3.14159265358979323846f;
+constexpr float kPiF = static_cast<float>(kPi);
 
 // 位相差は [0, PI] に wrap する。
 inline double phaseDiff(double a, double b) {
     double d = std::fabs(b - a);
-    if (d > kPi) d = 2.0 * kPi - d;
+    if (d > kPiF) d = 2.0 * kPiF - d;
     return d;
 }
 
@@ -54,7 +55,7 @@ void VocalFunc::init(int blockSize, int overlap, float extractLevel, bool quanti
     threshold_.assign(static_cast<std::size_t>(n_ / 2), 0.0f);
     for (int i = 0; i < n_ / 2; ++i) {
         const float t   = static_cast<float>(n_ / 2) / (static_cast<float>(i) + 1.0f);
-        const float thr = kPi / t;
+        const float thr = kPiF / t;
         threshold_[static_cast<std::size_t>(i)] =
             (thr * 0.5f + 1.0f) / kvol_;
     }
@@ -62,7 +63,7 @@ void VocalFunc::init(int blockSize, int overlap, float extractLevel, bool quanti
     // Hann window は win[i] = cos(2*PI*i/n) * -0.5 + 0.5。
     window_.assign(static_cast<std::size_t>(n_), 0.0f);
     for (int i = 0; i < n_; ++i) {
-        const double a = 2.0 * static_cast<double>(kPi) * i / n_;
+        const double a = 2.0 * static_cast<double>(kPiF) * i / n_;
         window_[static_cast<std::size_t>(i)] =
             static_cast<float>(std::cos(a)) * -0.5f + 0.5f;
     }
@@ -146,7 +147,7 @@ void VocalFunc::frame(const float* winL, const float* winR, float* termL, float*
         if (dPhase > thr) {
             // 抑圧は raised-cosine で滑らかにし、PI で最大になる。
             const double x = (dPhase - thr) * 2.0f * kvol_;
-            const double gain = (x < kPi)
+            const double gain = (x < kPiF)
                                     ? (std::cos(x) * 0.5 + 0.5)
                                     : 0.0;
             specA[2 * i]     = static_cast<float>(specA[2 * i] * gain);

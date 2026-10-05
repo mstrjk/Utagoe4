@@ -1,4 +1,5 @@
 #include "bw.h"
+#include "mathconst.h"
 #include "fft.h"
 #include "parallel.h"
 
@@ -10,7 +11,6 @@ namespace utagoe {
 namespace bw {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 int fftSize(double sr) {
     const double want = 4096.0 * sr / 44100.0;

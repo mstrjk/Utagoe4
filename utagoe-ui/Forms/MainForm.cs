@@ -4,11 +4,11 @@
 using System.Diagnostics;
 using Utagoe.App;
 using Utagoe.Native;
-using Utagoe.Vcl;
+using Utagoe.Ui;
 
 namespace Utagoe.Forms;
 
-internal sealed partial class MainForm : Form
+internal sealed partial class MainForm : UiWindow
 {
     private readonly AppSettings _settings;
     private bool _debugMode;
@@ -24,11 +24,10 @@ internal sealed partial class MainForm : Form
     // 「GPU が使えない」通知はこの起動中に一度だけ出す。
     private bool _gpuNoticeShown;
 
-    public MainForm(AppSettings settings)
+    public MainForm(AppSettings settings) : base(Definition)
     {
         _settings = settings;
         InitializeComponent();
-        Icon = VclGlyph.AppIcon;
 
         // TBevel は windowed control の下で form surface に直接描く。VCL と同じ重なり順にする。
         BevelPainter.Attach(this,
@@ -36,9 +35,8 @@ internal sealed partial class MainForm : Form
             new Bevel(16, 168, 433, 9, BevelShape.TopLine),
             new Bevel(456, 16, 9, 241, BevelShape.LeftLine),
             new Bevel(458, 270, 103, 17));
-        VclScaling.Apply(this);
+        ScaleToFont();
         InitPanels();
-        Theme.Paint(this);
 
         // GPU の初期化には時間がかかることがあるので、起動直後に裏で済ませておく。
         if (_settings.Values.UseGpu != 0) _ = Task.Run(() => Core.Gpu);
@@ -72,8 +70,19 @@ internal sealed partial class MainForm : Form
             _settings.Values = v;
             _settings.Save();
         };
+        CacheCheckBox.Checked = _settings.Values.CacheSteps != 0;
+        CacheCheckBox.CheckedChanged += (_, _) =>
+        {
+            int value = CacheCheckBox.Checked ? 1 : 0;
+            if (_settings.Values.CacheSteps == value) return;
+            var v = _settings.Values;
+            v.CacheSteps = value;
+            _settings.Values = v;
+            _settings.Save();
+            if (value == 0) Core.ClearStepCache();
+        };
         FitOutputChecks();
-        L.Changed += () => { Hints.SetToolTip(NormaliseCheckBox, Messages.NormaliseHint); FitOutputChecks(); };
+        UiText.OnChange(this, FitOutputChecks);
 
         // DFM 上では Edit1 / Edit3 が同じ KeyPress handler、Edit2 は別 handler。
         Edit1.KeyPress += Edit1KeyPress;
@@ -83,6 +92,7 @@ internal sealed partial class MainForm : Form
         StartBtn.Click += StartBtnClick;
         SetBitBtn.Click += SetBitBtnClick;
         HelpBtn.Click += HelpBtnClick;
+        FaqBtn.Click += (_, _) => FaqForm.ShowFor(this);
         AboutBtn.Click += (_, _) => ShowAbout();
         CloseBtn.Click += (_, _) => Close();
         DbgPanel.DoubleClick += DbgPanelDblClick;
@@ -94,7 +104,7 @@ internal sealed partial class MainForm : Form
             c.DragDrop += OnDragDrop;
         }
         ApplyOutputKind();
-        L.Changed += () => _infoPane?.ShowText(Messages.Welcome);
+        UiText.OnChange(this, () => _infoPane?.ShowText(Messages.Welcome));
     }
 
     private void BrowseInput(TextBox target, bool isOriginal)
@@ -137,7 +147,6 @@ internal sealed partial class MainForm : Form
     private string OutputFileFor(string original, string folder)
     {
         string suffix = SaveFiles.Kind(_settings.Values) == 1 ? Messages.PairSuffix
-                      : _settings.Values.OutputKind is 2 or 3 or 4 ? ""
                       : _settings.Values.AutoNameOutput != 0 ? _settings.Values.OutputSuffix : "";
         string name = Path.GetFileName(FileNaming.AutoOutputName(original, suffix,
                                        Core.FormatExtension((OutputFormat)_settings.Values.OutputFormat)));
@@ -346,8 +355,7 @@ internal sealed partial class MainForm : Form
         }
         LogHub.Line(rc switch
         {
-            0 when settings.OutputKind is 3 or 4 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {Core.OutputPaths(output, settings.OutputKind).First} ({result.Debug})",
-            0 when settings.OutputKind is 1 or 2 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {Core.OutputPaths(output, settings.OutputKind).First} + {Core.OutputPaths(output, settings.OutputKind).Second}",
+            0 when settings.OutputKind == 1 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {Core.AlignedPairPaths(output).Main} + {Core.AlignedPairPaths(output).Inst}",
             0 => $"finished in {clock.Elapsed:mm\\:ss\\.f} -> {output}",
             4 => "cancelled",
             _ => $"failed (code {rc}) after {clock.Elapsed:mm\\:ss\\.f}",
@@ -363,8 +371,6 @@ internal sealed partial class MainForm : Form
             if (result.GpuUsed != 0) note = (note.Length > 0 ? note + "\n" : "") + Messages.GpuUsed(result.GpuAdapter);
             Hints.SetToolTip(InfoLabel, note);
             if (_debugMode) ReportDebug(output, result);
-            if (settings.OutputKind == 3 && result.Debug.EndsWith(" 0 passed", StringComparison.Ordinal))
-                Utagoe.Forms.MessageForm.Show(this, Messages.NoRepeats, Messages.Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
         else if (rc == 4)
         {
@@ -400,10 +406,7 @@ internal sealed partial class MainForm : Form
     private bool ValidateInputs(string original, string instrumental, string folder, out string output)
     {
         output = "";
-        bool split = !NeedsInstrumental(_settings.Values);
-        if (split && (original.Length == 0 || folder.Length == 0))
-            return Fail(Messages.NeedOriginal);
-        if (!split && (original.Length == 0 || instrumental.Length == 0 || folder.Length == 0))
+        if (original.Length == 0 || instrumental.Length == 0 || folder.Length == 0)
             return Fail(Messages.NeedFiles);
 
         // 出力先の folder は無ければ作る (既定の Music\Utagoe も初回はまだ無い)。
@@ -421,15 +424,15 @@ internal sealed partial class MainForm : Form
         bool pair = runKind == 1;
         if (pair && string.Equals(Full(original), Full(instrumental), StringComparison.OrdinalIgnoreCase))
             return Fail(Messages.PairNeedsTwo);
-        var (pairMain, pairInst) = runKind != 0 ? Core.OutputPaths(output, runKind) : (output, output);
+        var (pairMain, pairInst) = pair ? Core.AlignedPairPaths(output) : (output, output);
         foreach (string written in new[] { pairMain, pairInst })
             if (string.Equals(Full(written), Full(original), StringComparison.OrdinalIgnoreCase) ||
-                (!split && string.Equals(Full(written), Full(instrumental), StringComparison.OrdinalIgnoreCase)))
+                string.Equals(Full(written), Full(instrumental), StringComparison.OrdinalIgnoreCase))
                 return Fail(Messages.SameInputOutput);
 
         if (!Core.TryProbeAudio(original, out _, out string e1))
             return Fail(Messages.Unreadable("original", e1));
-        if (!split && !Core.TryProbeAudio(instrumental, out _, out string e2))
+        if (!Core.TryProbeAudio(instrumental, out _, out string e2))
             return Fail(Messages.Unreadable("instrumental", e2));
 
         if (_settings.Values.OverwriteOutput == 0 && Written(output).FirstOrDefault(Taken) is { } existing)
@@ -445,8 +448,8 @@ internal sealed partial class MainForm : Form
         {
             int kind = SaveFiles.Kind(_settings.Values);
             if (kind == 0) return new[] { path }.Concat(SaveFiles.Extras(path, _settings.Values));
-            var (first, second) = Core.OutputPaths(path, kind);
-            return kind is 3 or 4 ? new[] { first } : new[] { first, second };
+            var (first, second) = Core.AlignedPairPaths(path);
+            return new[] { first, second };
         }
 
         static bool Taken(string path) => File.Exists(path) || Directory.Exists(path);
@@ -482,25 +485,34 @@ internal sealed partial class MainForm : Form
 
     private void ApplyOutputKind()
     {
-        bool needsInstrumental = NeedsInstrumental(_settings.Values);
         foreach (Control c in new Control[] { Label2, Edit2, BitBtn2 })
-            c.Enabled = needsInstrumental && !IsRunning;
+            c.Enabled = !IsRunning;
         UpdatePlayButtons();
     }
 
     private void FitOutputChecks()
     {
-        OverwriteCheckBox.Width = OverwriteCheckBox.PreferredSize.Width;
-        NormaliseCheckBox.Left = OverwriteCheckBox.Right + LogicalToDeviceUnits(16);
-        NormaliseCheckBox.Width = Math.Max(NormaliseCheckBox.PreferredSize.Width, Edit3.Right - NormaliseCheckBox.Left);
+        float k = _mainZoom?.Factor ?? 1f;
+        int Width(Control c) => (int)Math.Ceiling(c.PreferredSize.Width / k);
+        Rectangle Base(Control c) => _mainZoom?.BaseBounds(c) is { Width: > 0 } b ? b : c.Bounds;
+        void Place(Control c, Rectangle b)
+        {
+            if (_mainZoom != null) _mainZoom.SetBase(c, b);
+            else c.Bounds = b;
+        }
+        int gap = LogicalToDeviceUnits(16);
+        var overwrite = Base(OverwriteCheckBox);
+        overwrite.Width = Width(OverwriteCheckBox);
+        var normalise = Base(NormaliseCheckBox);
+        normalise.X = overwrite.Right + gap;
+        normalise.Width = Width(NormaliseCheckBox);
+        var cache = Base(CacheCheckBox);
+        cache.X = normalise.Right + gap;
+        cache.Width = Math.Min(Width(CacheCheckBox), LogicalToDeviceUnits(452) - cache.X);
+        Place(OverwriteCheckBox, overwrite);
+        Place(NormaliseCheckBox, normalise);
+        Place(CacheCheckBox, cache);
     }
-
-    private static bool NeedsInstrumental(in CoreSettings s) => s.OutputKind switch
-    {
-        2 or 3 => false,
-        4 => s.UpmixMethod is 4 or >= 6,
-        _ => true,
-    };
 
     private static bool Targets(string output, in CoreSettings settings, string path)
     {
@@ -510,9 +522,7 @@ internal sealed partial class MainForm : Form
         if (kind == 0)
             return new[] { output }.Concat(SaveFiles.Extras(output, settings))
                 .Any(f => string.Equals(candidate, Full(f), StringComparison.OrdinalIgnoreCase));
-        var (first, second) = Core.OutputPaths(output, kind);
-        if (kind == 3)
-            return candidate.StartsWith(Full(first).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        var (first, second) = Core.AlignedPairPaths(output);
         return string.Equals(candidate, Full(first), StringComparison.OrdinalIgnoreCase) ||
                string.Equals(candidate, Full(second), StringComparison.OrdinalIgnoreCase);
     }
@@ -521,23 +531,11 @@ internal sealed partial class MainForm : Form
     {
         var files = new List<string>();
         if (kind == 0) files.Add(output);
-        else if (kind == 4) files.Add(Core.OutputPaths(output, kind).First);
-        else if (kind is 1 or 2)
-        {
-            var (first, second) = Core.OutputPaths(output, kind);
-            files.Add(first);
-            files.Add(second);
-        }
         else
         {
-            string folder = Core.OutputPaths(output, kind).First;
-            try
-            {
-                files.AddRange(Directory.EnumerateFiles(folder)
-                    .Where(f => !f.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            var (first, second) = Core.AlignedPairPaths(output);
+            files.Add(first);
+            files.Add(second);
         }
         return files.Where(File.Exists).ToList();
     }
@@ -550,9 +548,8 @@ internal sealed partial class MainForm : Form
             try { return path.Length > 0 && File.Exists(path); }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException) { return false; }
         }
-        bool needsInstrumental = NeedsInstrumental(_settings.Values);
         PlayBtn1.Enabled = !IsRunning && Playable(Edit1.Text);
-        PlayBtn2.Enabled = !IsRunning && needsInstrumental && Playable(Edit2.Text);
+        PlayBtn2.Enabled = !IsRunning && Playable(Edit2.Text);
     }
 
     private void SetRunning(bool running)
@@ -560,7 +557,7 @@ internal sealed partial class MainForm : Form
         StartBtn.Text = running ? Messages.Running : Messages.Start;
 
         foreach (Control c in new Control[]
-                 { Edit1, Edit2, Edit3, BitBtn1, BitBtn2, BitBtn3, OverwriteCheckBox, NormaliseCheckBox,
+                 { Edit1, Edit2, Edit3, BitBtn1, BitBtn2, BitBtn3, OverwriteCheckBox, NormaliseCheckBox, CacheCheckBox,
                    PlayBtn1, PlayBtn2, SetBitBtn })
             c.Enabled = !running;
         if (!running) ApplyOutputKind();

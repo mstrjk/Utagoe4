@@ -1,4 +1,7 @@
 #include "hp.h"
+#include "mathconst.h"
+#include "log.h"
+#include <chrono>
 #include "parallel.h"
 
 #include <algorithm>
@@ -11,10 +14,7 @@ namespace hp {
 
 const char* methodName(Method m) {
     switch (m) {
-    case Method::Rational: return "Rational";
     case Method::Surface: return "Surface";
-    case Method::Trend: return "Trend";
-    case Method::Ctf: return "CTF";
     case Method::LowRank: return "Low-rank";
     }
     return "?";
@@ -22,7 +22,6 @@ const char* methodName(Method m) {
 
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 Audio slice(const Audio& a, std::size_t lo, std::size_t hi) {
     Audio s;
@@ -40,20 +39,16 @@ Audio subtract(const Audio& a, const Audio& b) {
 }
 
 std::vector<std::pair<Method, Audio>> render(const Audio& mix, const Audio& base, double sr,
-                                             const std::vector<Method>& methods, const Progress& progress, bool& cancelled) {
+                                             const std::vector<Method>& methods, const Progress& progress, bool& cancelled, int fft) {
     std::vector<std::pair<Method, Audio>> out;
     const std::size_t len = mix.frames();
-    int N = 1 << static_cast<int>(std::nearbyint(std::log2(2048.0 * sr / 44100.0)));
+    if (fft <= 0) fft = methods.size() == 1 ? defaultFft(methods[0]) : 2048;
+    int N = 1 << static_cast<int>(std::nearbyint(std::log2(static_cast<double>(fft) * sr / 44100.0)));
     N = std::max(256, N);
     const int hop = N / 4;
     auto want = [&](Method m) { return std::find(methods.begin(), methods.end(), m) != methods.end(); };
-    if (want(Method::Rational)) out.emplace_back(Method::Rational, subtract(mix, base));
-    if (want(Method::Trend)) {
-        if (progress && !progress(0.0, "sparse-curvature gain trend")) { cancelled = true; return out; }
-        out.emplace_back(Method::Trend, subtract(mix, trendDemaster(mix, base, sr)));
-    }
     std::vector<Method> spectral;
-    for (Method m : {Method::Surface, Method::Ctf, Method::LowRank})
+    for (Method m : {Method::Surface, Method::LowRank})
         if (want(m)) spectral.push_back(m);
     if (spectral.empty()) return out;
     const std::size_t core = std::max<std::size_t>(static_cast<std::size_t>(N) * 8, static_cast<std::size_t>(12.0 * sr));
@@ -66,8 +61,8 @@ std::vector<std::pair<Method, Audio>> render(const Audio& mix, const Audio& base
     std::atomic<int> done{0};
     std::atomic<bool> stop{false};
     std::mutex progressLock;
-    parallelFor(nb, 1, [&](long long b0, long long e0) {
-        for (long long bi = b0; bi < e0 && !stop; ++bi) {
+    auto block = [&](long long bi) {
+        {
             const std::size_t a = starts[static_cast<std::size_t>(bi)];
             const std::size_t b = std::min(a + core, len);
             const std::size_t lo = a >= context ? a - context : 0, hi = std::min(len, b + context);
@@ -77,7 +72,6 @@ std::vector<std::pair<Method, Audio>> render(const Audio& mix, const Audio& base
                 Spec B;
                 switch (spectral[mi]) {
                 case Method::Surface: B = phaseSurface(Y, X, sr, N, hop); break;
-                case Method::Ctf: B = ctf(Y, X, sr, N, hop); break;
                 default: B = lowrankField(Y, X, sr, N, hop); break;
                 }
                 const Audio p = rc::istft(B, N, hop, hi - lo);
@@ -89,6 +83,9 @@ std::vector<std::pair<Method, Audio>> render(const Audio& mix, const Audio& base
                 if (!progress(static_cast<double>(finished) / nb, "block " + std::to_string(finished) + "/" + std::to_string(nb))) stop = true;
             }
         }
+    };
+    parallelFor(nb, 1, [&](long long b0, long long e0) {
+        for (long long bi = b0; bi < e0 && !stop; ++bi) block(bi);
     });
     if (stop) { cancelled = true; return out; }
     for (std::size_t mi = 0; mi < spectral.size(); ++mi) {
@@ -144,21 +141,31 @@ Audio alignDense(const Audio& mix, const Audio& instrumental, double sr, TimeMap
         return !cancelled;
     };
     if (!report(0.0, "dense side-guided time map")) return {};
+    auto T0 = std::chrono::steady_clock::now();
+    auto lap = [&](const char* w) { auto t = std::chrono::steady_clock::now(); log::detail("  TIMER %s %.3f", w, std::chrono::duration<double>(t - T0).count()); T0 = t; };
     map = initialMap(mix, instrumental, sr);
+    lap("initialMap");
     Audio aligned = warpReference(instrumental, mix.frames(), map, sr);
+    lap("warp");
     for (int k = 0; k < 2; ++k) {
         if (!report(0.4 + 0.3 * k, "phase/time refinement " + std::to_string(k + 1) + "/2")) return {};
         const PhaseModel model = fitPhase(mix, aligned, sr);
+        lap("fitPhase");
         const Audio provisional = applyPhase(aligned, sr, model);
+        lap("applyPhase");
         refineMap(mix, provisional, map, sr, k == 0 ? 2.0 : 1.0);
+        lap("refineMap");
         aligned = warpReference(instrumental, mix.frames(), map, sr);
+        lap("warp");
     }
     report(1.0, "time map done");
     return aligned;
 }
 
+int defaultFft(Method m) { return m == Method::Surface ? 1024 : 2048; }
+
 Result separate(const Audio& mix, const Audio& instrumental, double sr, const std::vector<Method>& methods,
-                bool aligned, const Progress& progress) {
+                bool aligned, const Progress& progress, int fft) {
     if (mix.channels != 2 || instrumental.channels != 2) throw Error("these algorithms need stereo input (they use the side channel to protect the centre)");
     if (sr < 8000 || sr > 192000) throw Error("supported sample rates are 8000 to 192000 Hz");
     Result res;
@@ -178,7 +185,7 @@ Result separate(const Audio& mix, const Audio& instrumental, double sr, const st
     bool cancelled = false;
     Progress inner;
     if (progress) inner = [&](double f, const std::string& what) { return progress(0.25 + 0.75 * f, what); };
-    res.residuals = render(mix, res.base, sr, methods, inner, cancelled);
+    res.residuals = render(mix, res.base, sr, methods, inner, cancelled, fft);
     res.cancelled = cancelled;
     return res;
 }

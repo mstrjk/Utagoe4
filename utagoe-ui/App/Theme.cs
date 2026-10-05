@@ -2,7 +2,6 @@
 // 自前で描く部品 (terminal、見出し、bevel、説明、link) は描くたびに Theme.Current を読む。
 // WinForms の標準部品は Attach した form ごとに色を塗り直す。button の面、tab の見出し、radio の丸など Windows が描く所は替えない。
 
-using Utagoe.Vcl;
 
 namespace Utagoe.App;
 
@@ -46,14 +45,16 @@ internal sealed record Theme(
     public static Theme Current { get; private set; } = All[0];
 
     /// theme が替わったとき (UI thread で呼ばれる)。
+    public static event Action? Changing;
+
     public static event Action? Changed;
 
     public static void Set(string name)
     {
         var t = All.FirstOrDefault(x => x.Name == name) ?? All[0];
         if (t == Current) return;
+        Changing?.Invoke();
         Current = t;
-        foreach (Form f in Application.OpenForms.Cast<Form>().ToList()) Paint(f);
         Changed?.Invoke();
     }
 
@@ -110,60 +111,4 @@ internal sealed record Theme(
 
     public static Color Blend(Color a, Color b, double t) => Color.FromArgb(
         (int)Math.Round(a.R + (b.R - a.R) * t), (int)Math.Round(a.G + (b.G - a.G) * t), (int)Math.Round(a.B + (b.B - a.B) * t));
-
-
-    /// 部品の木をたどって色を付ける。自前で色を決めている部品 (terminal など) は自分で塗る。
-    public static void Paint(Control root)
-    {
-        L.Apply(root);
-        var t = Current;
-        // 単独の window は枠と title bar も theme で描く (Vcl.ThemedFrame)。
-        if (root is Form rf) ThemedFrame.Attach(rf);
-        Walk(root);
-        root.Invalidate(true);
-
-        void Walk(Control c)
-        {
-            switch (c)
-            {
-                case Form f when f is not Utagoe.Forms.XpTerminalWindow and not InfoTip:
-                    f.BackColor = t.Window;
-                    f.ForeColor = t.Text;
-                    break;
-                case TextBoxBase or ComboBox or NumericUpDown or ListBox:
-                    c.BackColor = t.Input;
-                    c.ForeColor = t.InputText;
-                    // どの theme も細い枠の平らな入力欄にそろえる (Windows の立体枠は theme の色にならないため)。
-                    if (c is TextBox tbx) tbx.BorderStyle = BorderStyle.FixedSingle;
-                    if (c is UpDownBase ud) ud.BorderStyle = BorderStyle.FixedSingle;
-                    if (c is ComboBox cb) cb.FlatStyle = FlatStyle.Flat;
-                    if (c is TextBox or ComboBox or NumericUpDown) Utagoe.Vcl.FocusLine.Attach(c);
-                    break;
-                case TabPage tp:
-                    tp.UseVisualStyleBackColor = false;
-                    tp.BackColor = t.Window;
-                    tp.ForeColor = t.Text;
-                    break;
-                case Button b:
-                    // button は BitBtn が theme の色で面を描くので、文字も theme の文字色。
-                    b.ForeColor = t.Text;
-                    break;
-                case LinkLabel ll:
-                    ll.LinkColor = ll.ActiveLinkColor = ll.VisitedLinkColor = t.Link;
-                    ll.DisabledLinkColor = t.DisabledLink;
-                    break;
-                case TrackBar tb:
-                    tb.BackColor = t.Window;
-                    break;
-                case Label l when "muted".Equals(l.Tag):
-                    l.ForeColor = t.Muted;
-                    break;
-                case Label l when "link".Equals(l.Tag):
-                    l.ForeColor = t.Link;
-                    break;
-            }
-            if (c is Utagoe.Forms.TerminalView or Utagoe.Forms.XpTerminalWindow) { if (c is Utagoe.Forms.XpTerminalWindow x) x.ApplyTheme(); return; }
-            foreach (Control child in c.Controls) Walk(child);
-        }
-    }
 }

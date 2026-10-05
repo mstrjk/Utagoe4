@@ -9,7 +9,7 @@ internal static class SaveFiles
     public static readonly string[] MemberSuffixes =
         { "_robust", "_kalman", "_hammerstein", "_rational", "_surface", "_trend", "_ctf", "_low_rank", "_ensemble_small", "_ensemble_large" };
 
-    public static bool MembersAvailable(int mergeMode, int waveModel) => mergeMode == 1 && waveModel is 6 or 12 or 13;
+    public static bool MembersAvailable(int mergeMode, int waveModel) => mergeMode == 1 && waveModel is 6;
 
     public static int Effective(int kind, int mask, bool membersAvailable)
     {

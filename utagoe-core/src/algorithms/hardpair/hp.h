@@ -8,6 +8,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <memory>
 #include <vector>
 
 namespace utagoe {
@@ -18,7 +19,7 @@ using rc::Spec;
 using rc::cd;
 using rc::cf;
 
-enum class Method { Rational = 0, Surface = 1, Trend = 2, Ctf = 3, LowRank = 4 };
+enum class Method { Surface = 1, LowRank = 4 };
 
 struct Error : std::runtime_error {
     using std::runtime_error::runtime_error;
@@ -62,6 +63,11 @@ std::vector<double> windowEnergyValid(const std::vector<double>& r, int win);
 std::vector<double> hann(int n);
 std::size_t nextFastLen(std::size_t n);
 std::vector<cd> rfftAny(const std::vector<double>& x, std::size_t n);
+struct BluesteinPlan {
+    std::size_t n = 0, m = 0;
+    std::vector<cd> chirp, kernel;
+};
+std::shared_ptr<const BluesteinPlan> bluesteinPlan(std::size_t n);
 std::vector<double> convolveFull(const std::vector<double>& x, const std::vector<double>& h, std::size_t from, std::size_t count);
 std::vector<double> solveDense(std::vector<double> a, std::vector<double> b, int n);
 void hermitianTopEigen(std::vector<cd>& g, int n, int k, std::vector<double>& values, std::vector<cd>& vectors);
@@ -88,9 +94,7 @@ PhaseModel fitPhase(const Audio& mix, const Audio& ref, double sr);
 Audio applyPhase(const Audio& ref, double sr, const PhaseModel& model);
 
 Spec phaseSurface(const Spec& Y, const Spec& X, double sr, int nFft, int hop);
-Spec ctf(const Spec& Y, const Spec& X, double sr, int nFft, int hop);
 Spec lowrankField(const Spec& Y, const Spec& X, double sr, int nFft, int hop);
-Audio trendDemaster(const Audio& mix, const Audio& base, double sr);
 
 using Progress = std::function<bool(double, const std::string&)>;
 
@@ -106,9 +110,10 @@ struct Result {
 Audio prealignedReference(const Audio& mix, const Audio& instrumental);
 Audio alignDense(const Audio& mix, const Audio& instrumental, double sr, TimeMap& map, const Progress& progress, bool& cancelled);
 Result separate(const Audio& mix, const Audio& instrumental, double sr, const std::vector<Method>& methods,
-                bool aligned, const Progress& progress);
+                bool aligned, const Progress& progress, int fft = 0);
 std::vector<std::pair<Method, Audio>> render(const Audio& mix, const Audio& base, double sr,
-                                             const std::vector<Method>& methods, const Progress& progress, bool& cancelled);
+                                             const std::vector<Method>& methods, const Progress& progress, bool& cancelled, int fft = 0);
+int defaultFft(Method m);
 
 const char* methodName(Method m);
 

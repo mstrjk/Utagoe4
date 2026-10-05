@@ -147,7 +147,7 @@ set(CODEC_DLLS ogg_dll opus_dll flac_dll vorbis_dll opusfile_dll opusenc_dll drl
 
 set(CORE_SOURCES
     src/fft.cpp src/settings.cpp src/parallel.cpp src/gpu.cpp src/extract.cpp src/resample.cpp
-    src/decode.cpp src/encode.cpp src/mediafoundation.cpp src/log.cpp
+    src/decode.cpp src/encode.cpp src/mediafoundation.cpp src/log.cpp src/stepcache.cpp
     src/algorithms/v3/engine.cpp src/algorithms/v3/freq_engine.cpp src/algorithms/v3/vocal_func.cpp src/algorithms/v3/fir.cpp
     src/algorithms/v3/pipeline.cpp src/algorithms/v3/worker.cpp
     src/algorithms/refcancel/rc_dsp.cpp src/algorithms/refcancel/rc_pipeline.cpp
@@ -155,14 +155,8 @@ set(CORE_SOURCES
     src/algorithms/refcancel/nmf.cpp src/algorithms/refcancel/spatial.cpp src/algorithms/refcancel/ensemble.cpp
     src/algorithms/hardpair/hp_dsp.cpp src/algorithms/hardpair/hp_grid.cpp src/algorithms/hardpair/hp_pipeline.cpp
     src/algorithms/hardpair/time_map.cpp src/algorithms/hardpair/rational.cpp src/algorithms/hardpair/surface.cpp
-    src/algorithms/hardpair/ctf.cpp src/algorithms/hardpair/lowrank.cpp src/algorithms/hardpair/trend.cpp
-    src/algorithms/centresides/cs.cpp src/algorithms/centresides/true_ms.cpp src/algorithms/centresides/phantom.cpp
-    src/algorithms/centresides/coherence.cpp src/algorithms/centresides/adress.cpp src/algorithms/centresides/duet.cpp
-    src/algorithms/centresides/pca.cpp src/algorithms/centresides/pretty.cpp
-    src/algorithms/repeats/rp_dsp.cpp src/algorithms/repeats/rp_workers.cpp src/algorithms/repeats/rp_discovery.cpp
-    src/algorithms/repeats/rp_align.cpp src/algorithms/repeats/rp_verify.cpp src/algorithms/repeats/rp_run.cpp
-    src/algorithms/bandwidth/bw.cpp src/algorithms/lowend/lowend.cpp
-    src/algorithms/upmix/upmix_dsp.cpp src/algorithms/upmix/specfield.cpp src/algorithms/upmix/scene.cpp)
+    src/algorithms/hardpair/lowrank.cpp
+    src/algorithms/bandwidth/bw.cpp src/algorithms/lowend/lowend.cpp)
 
 add_library(utagoe_objs OBJECT ${CORE_SOURCES})
 target_include_directories(utagoe_objs PUBLIC include src)
@@ -206,7 +200,7 @@ target_link_libraries(utagoe_bench PRIVATE utagoe_objs)
 target_link_options(utagoe_bench PRIVATE ${STATIC_RUNTIME})
 
 # By Waveform 代替モデルを Python 版の出力と照合する道具。配布物には含めない。
-foreach(parity rc hp cs rp bw probe up)
+foreach(parity rc hp bw probe)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${parity}_parity.cpp)
         add_executable(utagoe_${parity}_parity EXCLUDE_FROM_ALL tests/${parity}_parity.cpp)
         target_link_libraries(utagoe_${parity}_parity PRIVATE utagoe_objs)

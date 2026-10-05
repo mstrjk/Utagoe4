@@ -1,9 +1,9 @@
 using Utagoe.App;
-using Utagoe.Vcl;
+using Utagoe.Ui;
 
 namespace Utagoe.Forms;
 
-internal sealed class MessageForm : Form
+internal sealed class MessageForm : UiWindow
 {
     public static DialogResult Show(IWin32Window? owner, string text, string caption,
                                     MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None,
@@ -17,22 +17,18 @@ internal sealed class MessageForm : Form
                                     MessageBoxButtons buttons = MessageBoxButtons.OK, MessageBoxIcon icon = MessageBoxIcon.None) =>
         Show(null, text, caption, buttons, icon);
 
-    private MessageForm(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, bool owned,
-                        string? heading, string? confirm)
+    private static WindowSpec Definition(string caption, bool owned) => new()
     {
-        AutoScaleMode = AutoScaleMode.None;
-        Font = new Font("Tahoma", 9F);
-        FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false;
-        MinimizeBox = false;
-        ShowInTaskbar = !owned;
-        StartPosition = owned ? FormStartPosition.CenterParent : FormStartPosition.CenterScreen;
-        Text = caption;
-        Icon = VclGlyph.AppIcon;
+        Border = Border.Dialog,
+        Scaling = Scaling.None,
+        Taskbar = !owned,
+        Placement = owned ? Placement.CenterParent : Placement.CenterScreen,
+        Title = () => caption,
+    };
 
-        float k = DeviceDpi / 96f;
-        int S(int v) => (int)Math.Round(v * k);
-
+    private MessageForm(string text, string caption, MessageBoxButtons buttons, MessageBoxIcon icon, bool owned,
+                        string? heading, string? confirm) : base(Definition(caption, owned))
+    {
         Icon? sys = icon switch
         {
             MessageBoxIcon.Error => SystemIcons.Error,
@@ -45,13 +41,7 @@ internal sealed class MessageForm : Form
         int iconBottom = 0;
         if (sys != null)
         {
-            var pic = new PictureBox
-            {
-                Bounds = new Rectangle(S(16), S(16), S(32), S(32)),
-                Image = new Icon(sys, S(32), S(32)).ToBitmap(),
-                SizeMode = PictureBoxSizeMode.Zoom,
-                BackColor = Color.Transparent,
-            };
+            var pic = Element.Picture(new Icon(sys, S(32), S(32)).ToBitmap(), new Rectangle(S(16), S(16), S(32), S(32)), PictureBoxSizeMode.Zoom);
             Controls.Add(pic);
             left = S(60);
             iconBottom = pic.Bottom;
@@ -68,23 +58,12 @@ internal sealed class MessageForm : Form
         {
             var bold = new Font(Font, FontStyle.Bold);
             int hh = TextRenderer.MeasureText(heading, bold, new Size(textWidth, int.MaxValue), flags).Height;
-            Controls.Add(new ThemedLabel
-            {
-                Text = heading,
-                Font = bold,
-                UseMnemonic = false,
-                Bounds = new Rectangle(left, S(16), textWidth, hh + S(2)),
-                BackColor = Color.Transparent,
-            });
+            var head = Element.Text(() => heading, new Rectangle(left, S(16), textWidth, hh + S(2)), transparent: true);
+            head.Font = bold;
+            Controls.Add(head);
             textTop = S(16) + hh + S(8);
         }
-        var label = new ThemedLabel
-        {
-            Text = text,
-            UseMnemonic = false,
-            Bounds = new Rectangle(left, textTop, textWidth, textHeight),
-            BackColor = Color.Transparent,
-        };
+        var label = Element.Text(() => text, new Rectangle(left, textTop, textWidth, textHeight), transparent: true);
         Controls.Add(label);
 
         var specs = buttons switch
@@ -101,12 +80,16 @@ internal sealed class MessageForm : Form
         int width = Math.Max(left + textWidth + S(18), rowWidth + S(32));
         var made = new List<BitBtn>();
         int x = width - S(16) - rowWidth;
-        foreach (var (kind, label2, result) in specs)
+        foreach (var (kind, key, result) in specs)
         {
-            var b = new BitBtn { Bounds = new Rectangle(x, rowTop, bw, bh), TabIndex = made.Count };
-            if (kind != BitBtnKind.Custom) b.SetKind(kind);
-            else b.Text = L.T(label2);
-            if (confirm != null && made.Count == 0) b.Text = confirm;
+            var bounds = new Rectangle(x, rowTop, bw, bh);
+            var b = kind switch
+            {
+                BitBtnKind.OK => Element.Ok(bounds, made.Count),
+                BitBtnKind.Cancel => Element.Cancel(bounds, made.Count),
+                _ => Element.Button(key, bounds, made.Count),
+            };
+            if (confirm != null && made.Count == 0) UiText.Bind(b, () => confirm);
             b.DialogResult = result;
             Controls.Add(b);
             made.Add(b);
@@ -115,6 +98,6 @@ internal sealed class MessageForm : Form
         AcceptButton = made[0];
         CancelButton = made[^1];
         ClientSize = new Size(width, rowTop + bh + S(14));
-        Theme.Paint(this);
+        Ready();
     }
 }

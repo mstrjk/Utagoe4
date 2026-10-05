@@ -3,6 +3,7 @@
 // 相互相関の FFT 長は 2 のべき乗にしている (Python 版は 5-smooth の長さ)。どちらも線形相関として同じ値になる。
 
 #include "rc.h"
+#include "mathconst.h"
 #include "parallel.h"
 #include "log.h"
 
@@ -17,7 +18,6 @@ namespace utagoe {
 namespace rc {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 Spec selectFrames(const Spec& z, const std::vector<char>& keep) {
     int n = 0;
@@ -217,49 +217,71 @@ Calibration calibrate(const Audio& mix, const Audio& reference, const std::vecto
 namespace {
 
 // 一般化相互相関。|相関| の最大を探すので極性が逆でもよい。戻り値は (遅れ, 信頼度)。
-std::pair<double, double> gccDelay(const std::vector<double>& yIn, const std::vector<double>& xIn, long long maxLag,
-                                   double beta, int oversample) {
+struct GccJob {
+    bool live = false;
+    std::size_t n = 0, nfft = 0, big = 0;
+    std::vector<double> y, x;
+    std::vector<cd> Y, X, full;
+};
+
+void gccPrepare(const std::vector<double>& yIn, const std::vector<double>& xIn, GccJob& g) {
     const std::size_t n = std::min(yIn.size(), xIn.size());
-    if (n < 16) return {0.0, 0.0};
+    if (n < 16) return;
     std::vector<double> y(yIn.begin(), yIn.begin() + static_cast<std::ptrdiff_t>(n)), x(xIn.begin(), xIn.begin() + static_cast<std::ptrdiff_t>(n));
     double ny = 0, nx = 0;
     for (std::size_t i = 0; i < n; ++i) { ny += y[i] * y[i]; nx += x[i] * x[i]; }
-    if (std::sqrt(ny) < 1e-12 || std::sqrt(nx) < 1e-12) return {0.0, 0.0};
+    if (std::sqrt(ny) < 1e-12 || std::sqrt(nx) < 1e-12) return;
     const double my = std::accumulate(y.begin(), y.end(), 0.0) / n, mx = std::accumulate(x.begin(), x.end(), 0.0) / n;
     for (std::size_t i = 0; i < n; ++i) { y[i] -= my; x[i] -= mx; }
     const std::size_t nfft = nextPow2(2 * n - 1);
-    std::vector<cd> Y(nfft), X(nfft);
-    for (std::size_t i = 0; i < n; ++i) { Y[i] = y[i]; X[i] = x[i]; }
-    fftDouble(Y, false);
-    fftDouble(X, false);
-    const std::size_t half = nfft / 2;
+    g.Y.assign(nfft, cd(0, 0));
+    g.X.assign(nfft, cd(0, 0));
+    for (std::size_t i = 0; i < n; ++i) { g.Y[i] = y[i]; g.X[i] = x[i]; }
+    g.live = true;
+    g.n = n;
+    g.nfft = nfft;
+    g.y = std::move(y);
+    g.x = std::move(x);
+}
+
+void gccMiddle(GccJob& g, double beta, int oversample) {
+    const std::size_t half = g.nfft / 2;
     std::vector<cd> cross(half + 1);
     double maxAbs = 0;
     for (std::size_t k = 0; k <= half; ++k) {
-        cross[k] = Y[k] * std::conj(X[k]);
+        cross[k] = g.Y[k] * std::conj(g.X[k]);
         maxAbs = std::max(maxAbs, std::abs(cross[k]));
     }
     const double floor = std::max(maxAbs * 1e-7, 1e-20);
     for (std::size_t k = 0; k <= half; ++k) cross[k] /= std::pow(std::max(std::abs(cross[k]), floor), beta);
     cross[0] = 0;
     // 帯域制限の補間: 片側 spectrum を 0 詰めして長い irfft を取る。
-    const std::size_t big = nfft * static_cast<std::size_t>(oversample);
-    std::vector<cd> full(big, cd(0, 0));
+    const std::size_t big = g.nfft * static_cast<std::size_t>(oversample);
+    g.big = big;
+    g.full.assign(big, cd(0, 0));
     for (std::size_t k = 0; k <= half; ++k) {
-        full[k] = cross[k];
-        if (k > 0 && k < big / 2) full[big - k] = std::conj(cross[k]);
+        g.full[k] = cross[k];
+        if (k > 0 && k < big / 2) g.full[big - k] = std::conj(cross[k]);
     }
-    if (oversample == 1) full[half] = cd(cross[half].real(), 0);
-    fftDouble(full, true);
+    if (oversample == 1) g.full[half] = cd(cross[half].real(), 0);
+    std::vector<cd>().swap(g.Y);
+    std::vector<cd>().swap(g.X);
+}
+
+std::pair<double, double> gccFinish(const GccJob& g, long long maxLag, int oversample) {
+    const std::size_t n = g.n, big = g.big;
+    const std::vector<double>& y = g.y;
+    const std::vector<double>& x = g.x;
+    const std::vector<cd>& full = g.full;
     const long long lim = std::min<long long>(std::max<long long>(0, maxLag), static_cast<long long>(n / 2)) * oversample;
     long long bestK = 0;
     double bestV = -1;
     std::vector<double> vals(static_cast<std::size_t>(2 * lim + 1));
-    for (long long g = -lim; g <= lim; ++g) {
-        const std::size_t at = static_cast<std::size_t>(((g % static_cast<long long>(big)) + static_cast<long long>(big)) % static_cast<long long>(big));
+    for (long long gg = -lim; gg <= lim; ++gg) {
+        const std::size_t at = static_cast<std::size_t>(((gg % static_cast<long long>(big)) + static_cast<long long>(big)) % static_cast<long long>(big));
         const double v = std::abs(full[at].real());
-        vals[static_cast<std::size_t>(g + lim)] = v;
-        if (v > bestV) { bestV = v; bestK = g + lim; }
+        vals[static_cast<std::size_t>(gg + lim)] = v;
+        if (v > bestV) { bestV = v; bestK = gg + lim; }
     }
     double frac = 0.0;
     if (bestK > 0 && bestK < static_cast<long long>(vals.size()) - 1) {
@@ -279,6 +301,33 @@ std::pair<double, double> gccDelay(const std::vector<double>& yIn, const std::ve
     }
     const double score = std::fabs(dot) / (std::sqrt(na * nb) + 1e-20);
     return {lag, std::clamp(score, 0.0, 1.0)};
+}
+
+std::vector<std::pair<double, double>> gccDelayMany(const std::vector<std::pair<const std::vector<double>*, const std::vector<double>*>>& inputs,
+                                                    long long maxLag, double beta, int oversample) {
+    std::vector<GccJob> jobs(inputs.size());
+    parallelFor(static_cast<long long>(inputs.size()), 1, [&](long long b0, long long e0) {
+        for (long long i = b0; i < e0; ++i)
+            gccPrepare(*inputs[static_cast<std::size_t>(i)].first, *inputs[static_cast<std::size_t>(i)].second, jobs[static_cast<std::size_t>(i)]);
+    });
+    std::vector<std::vector<cd>*> batch;
+    for (GccJob& g : jobs)
+        if (g.live) { batch.push_back(&g.Y); batch.push_back(&g.X); }
+    fftDoubleMany(batch, false);
+    parallelFor(static_cast<long long>(jobs.size()), 1, [&](long long b0, long long e0) {
+        for (long long i = b0; i < e0; ++i)
+            if (jobs[static_cast<std::size_t>(i)].live) gccMiddle(jobs[static_cast<std::size_t>(i)], beta, oversample);
+    });
+    batch.clear();
+    for (GccJob& g : jobs)
+        if (g.live) batch.push_back(&g.full);
+    fftDoubleMany(batch, true);
+    std::vector<std::pair<double, double>> out(jobs.size(), {0.0, 0.0});
+    parallelFor(static_cast<long long>(jobs.size()), 1, [&](long long b0, long long e0) {
+        for (long long i = b0; i < e0; ++i)
+            if (jobs[static_cast<std::size_t>(i)].live) out[static_cast<std::size_t>(i)] = gccFinish(jobs[static_cast<std::size_t>(i)], maxLag, oversample);
+    });
+    return out;
 }
 
 // Kaiser 窓 I0(beta sqrt(1 - r^2)) / I0(beta) を r^2 の表から線形補間で引く。
@@ -318,6 +367,37 @@ std::vector<double> decimate(const std::vector<double>& x, int sr, int target) {
     const std::size_t n = static_cast<std::size_t>(static_cast<double>(x.size()) / ratio);
     std::vector<double> y(n);
     static const KaiserTable kaiser(8.0);
+    const long long reach = static_cast<long long>(taps * ratio);
+    if (ratio == std::floor(ratio) && ratio * static_cast<double>(n) < 9.0e15) {
+        std::vector<double> wt(static_cast<std::size_t>(2 * reach + 1), 0.0);
+        std::vector<char> on(wt.size(), 0);
+        double wsum = 0;
+        for (long long off = -reach; off <= reach; ++off) {
+            const double d = static_cast<double>(off);
+            const double r = d / (taps * ratio);
+            if (std::fabs(r) >= 1.0) continue;
+            const double arg = 2 * fc * d;
+            const double s = arg == 0 ? 1.0 : std::sin(kPi * arg) / (kPi * arg);
+            const double w = 2 * fc * s * kaiser(r);
+            wt[static_cast<std::size_t>(off + reach)] = w;
+            on[static_cast<std::size_t>(off + reach)] = 1;
+            wsum += w;
+        }
+        parallelFor(static_cast<long long>(n), 4096, [&](long long b, long long e) {
+            for (long long i = b; i < e; ++i) {
+                const double center = static_cast<double>(i) * ratio;
+                const long long c0 = static_cast<long long>(std::floor(center));
+                double acc = 0;
+                for (long long j = c0 - reach; j <= c0 + reach; ++j) {
+                    const std::size_t k = static_cast<std::size_t>(j - c0 + reach);
+                    if (!on[k]) continue;
+                    if (j >= 0 && j < static_cast<long long>(x.size())) acc += x[static_cast<std::size_t>(j)] * wt[k];
+                }
+                y[static_cast<std::size_t>(i)] = wsum != 0 ? acc / wsum : 0.0;
+            }
+        });
+        return y;
+    }
     parallelFor(static_cast<long long>(n), 4096, [&](long long b, long long e) {
         for (long long i = b; i < e; ++i) {
             const double center = static_cast<double>(i) * ratio;
@@ -355,10 +435,13 @@ Alignment estimateAlignment(const Audio& mix, const Audio& ref, int sr, const Co
     std::vector<std::vector<double>> ylow, xlow;
     for (int a = 0; a < mix.channels; ++a) ylow.push_back(decimate(channelSlice(mix, a, 0, coarseN), sr, lowSr));
     for (int b = 0; b < ref.channels; ++b) xlow.push_back(decimate(channelSlice(ref, b, 0, coarseN), sr, lowSr));
+    std::vector<std::pair<const std::vector<double>*, const std::vector<double>*>> pairsIn;
+    for (int a = 0; a < mix.channels; ++a)
+        for (int b = 0; b < ref.channels; ++b) pairsIn.push_back({&ylow[static_cast<std::size_t>(a)], &xlow[static_cast<std::size_t>(b)]});
+    const auto pairsOut = gccDelayMany(pairsIn, static_cast<long long>(cfg.maxOffsetSeconds * lowSr), 0.25, 1);
     for (int a = 0; a < mix.channels; ++a)
         for (int b = 0; b < ref.channels; ++b) {
-            const auto [d, s] = gccDelay(ylow[static_cast<std::size_t>(a)], xlow[static_cast<std::size_t>(b)],
-                                         static_cast<long long>(cfg.maxOffsetSeconds * lowSr), 0.25, 1);
+            const auto [d, s] = pairsOut[static_cast<std::size_t>(a) * static_cast<std::size_t>(ref.channels) + static_cast<std::size_t>(b)];
             if (s > bestScore) { bestScore = s; coarse = d * sr / lowSr; cy = a; cx = b; }
         }
     const long long win = std::min<long long>(static_cast<long long>(cfg.alignmentWindowSeconds * sr), static_cast<long long>(n / 2));
@@ -376,12 +459,24 @@ Alignment estimateAlignment(const Audio& mix, const Audio& ref, int sr, const Co
     localLimit = std::min(std::max<long long>(8, localLimit), win / 3);
     struct Anchor { double t, d, w; };
     std::vector<Anchor> anchors(centers.size(), {0, 0, -1});
+    std::vector<std::vector<double>> ys(centers.size()), xs(centers.size());
+    std::vector<std::size_t> which;
+    std::vector<std::pair<const std::vector<double>*, const std::vector<double>*>> anchorIn;
     for (std::size_t i = 0; i < centers.size(); ++i) {
         const long long sy = centers[i] - half;
         const long long sx = std::llround(static_cast<double>(sy) - coarse);
         if (sy < 0 || sx < 0 || sy + win > static_cast<long long>(mix.frames()) || sx + win > static_cast<long long>(ref.frames())) continue;
-        const auto [lag, score] = gccDelay(channelSlice(mix, cy, static_cast<std::size_t>(sy), static_cast<std::size_t>(win)),
-                                           channelSlice(ref, cx, static_cast<std::size_t>(sx), static_cast<std::size_t>(win)), localLimit, 0.5, 8);
+        ys[i] = channelSlice(mix, cy, static_cast<std::size_t>(sy), static_cast<std::size_t>(win));
+        xs[i] = channelSlice(ref, cx, static_cast<std::size_t>(sx), static_cast<std::size_t>(win));
+        which.push_back(i);
+        anchorIn.push_back({&ys[i], &xs[i]});
+    }
+    const auto anchorOut = gccDelayMany(anchorIn, localLimit, 0.5, 8);
+    for (std::size_t j = 0; j < which.size(); ++j) {
+        const std::size_t i = which[j];
+        const long long sy = centers[i] - half;
+        const long long sx = std::llround(static_cast<double>(sy) - coarse);
+        const auto [lag, score] = anchorOut[j];
         anchors[i] = {static_cast<double>(centers[i]), static_cast<double>(sy - sx) + lag, score};
     }
     std::vector<Anchor> usable;
@@ -571,7 +666,11 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
     const std::size_t core = std::max<std::size_t>(static_cast<std::size_t>(cfg.nFft) * 4, static_cast<std::size_t>(cfg.blockSeconds * sr));
     const std::size_t context = std::max<std::size_t>(static_cast<std::size_t>(cfg.nFft), static_cast<std::size_t>(cfg.contextSeconds * sr));
     const std::size_t step = std::max<std::size_t>(1, static_cast<std::size_t>(core * 0.75));
-    for (std::size_t a = 0; a < len; a += step) {
+    struct BlockOut {
+        Audio removed;
+        std::vector<std::pair<const char*, Audio>> members;
+    };
+    auto compute = [&](std::size_t a, BlockOut& out) {
         const std::size_t b = std::min(a + core, len);
         const std::size_t left = a >= context ? a - context : 0, right = std::min(len, b + context);
         const Audio mixBlk = slice(mix, left, right), refBlk = slice(reference, left, right);
@@ -625,18 +724,33 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
             }
             bg = consensusBackground(cands, baseline, cfg.ensembleStrength);
             if (keep) {
-                blockMembers.emplace_back("Robust", baseline);
+                blockMembers.emplace_back("Robust", cal.nonlinearAccepted ? hm : baseline);
                 blockMembers.emplace_back("Kalman", k);
-                if (cal.nonlinearAccepted) blockMembers.emplace_back("Hammerstein", hm);
             }
             break;
         }
         }
 
+        out.removed = istft(bg, cfg.nFft, cfg.hop, right - left);
+        for (auto& [name, spec] : blockMembers) out.members.emplace_back(name, istft(spec, cfg.nFft, cfg.hop, right - left));
+    };
+    std::vector<std::size_t> starts;
+    for (std::size_t a = 0; a < len; a += step) starts.push_back(a);
+    const std::size_t wave = static_cast<std::size_t>(std::max(1, workerCount()));
+    for (std::size_t first = 0; first < starts.size(); first += wave) {
+      const std::size_t count = std::min(wave, starts.size() - first);
+      std::vector<BlockOut> outs(count);
+      parallelFor(static_cast<long long>(count), 1, [&](long long b0, long long e0) {
+          for (long long i = b0; i < e0; ++i) compute(starts[first + static_cast<std::size_t>(i)], outs[static_cast<std::size_t>(i)]);
+      });
+      for (std::size_t bi = 0; bi < count; ++bi) {
+        const std::size_t a = starts[first + bi];
+        const std::size_t b = std::min(a + core, len);
+        const std::size_t left = a >= context ? a - context : 0;
+        BlockOut& o = outs[bi];
         // 背景を波形に戻し、原曲から引く。block の重なりは正の cosine 窓で重みづけして足す。
         const std::size_t length = b - a;
-        auto add = [&](const Spec& spec, std::vector<double>& into, bool weights) {
-            const Audio removed = istft(spec, cfg.nFft, cfg.hop, right - left);
+        auto add = [&](const Audio& removed, std::vector<double>& into, bool weights) {
             for (std::size_t i = 0; i < length; ++i) {
                 double w = std::pow(std::sin(kPi * (static_cast<double>(i) + 0.5) / length), 2);
                 if (a == 0 && i < std::min(step / 2, length)) w = 1.0;
@@ -649,13 +763,13 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
                 }
             }
         };
-        add(bg, acc, true);
-        for (std::size_t m = 0; m < blockMembers.size(); ++m) {
+        add(o.removed, acc, true);
+        for (std::size_t m = 0; m < o.members.size(); ++m) {
             if (m >= memberAcc.size()) {
-                memberNames.emplace_back(blockMembers[m].first);
+                memberNames.emplace_back(o.members[m].first);
                 memberAcc.emplace_back(len * static_cast<std::size_t>(C), 0.0);
             }
-            add(blockMembers[m].second, memberAcc[m], false);
+            add(o.members[m].second, memberAcc[m], false);
         }
         // Python 版と同じく、開始位置は最後まで刻む (末尾の短い block も重ねて足す)。
         ++block;
@@ -663,6 +777,7 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
         log::status(1, false, "  %s | block %d/%lld | %s elapsed | ~%s left", log::progressBar(frac).c_str(), block, totalBlocks,
                     log::clock(eta.elapsed()).c_str(), log::clock(eta.remaining(frac)).c_str());
         if (!report(0.3 + 0.7 * frac)) return res;
+      }
     }
     log::clearStatus(1);
     for (std::size_t i = 0; i < len; ++i)

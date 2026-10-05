@@ -1,6 +1,10 @@
 #include "hp.h"
+#include "mathconst.h"
 #include "parallel.h"
 
+#include <mutex>
+#include <memory>
+#include <map>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -11,7 +15,6 @@ namespace utagoe {
 namespace hp {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 std::size_t pow2At(std::size_t n) {
     std::size_t p = 1;
@@ -298,6 +301,30 @@ std::size_t nextFastLen(std::size_t n) {
     }
 }
 
+std::shared_ptr<const BluesteinPlan> bluesteinPlan(std::size_t n) {
+    static std::mutex planLock;
+    static std::map<std::size_t, std::shared_ptr<const BluesteinPlan>> plans;
+    std::lock_guard<std::mutex> g(planLock);
+    auto& slot = plans[n];
+    if (!slot) {
+        auto fresh = std::make_shared<BluesteinPlan>();
+        const std::size_t m = pow2At(2 * n - 1);
+        fresh->n = n;
+        fresh->m = m;
+        fresh->chirp.resize(n);
+        for (std::size_t j = 0; j < n; ++j) {
+            const unsigned long long jj = (static_cast<unsigned long long>(j) * j) % (2ULL * n);
+            fresh->chirp[j] = std::polar(1.0, -kPi * static_cast<double>(jj) / static_cast<double>(n));
+        }
+        fresh->kernel.assign(m, cd(0, 0));
+        fresh->kernel[0] = std::conj(fresh->chirp[0]);
+        for (std::size_t j = 1; j < n; ++j) fresh->kernel[j] = fresh->kernel[m - j] = std::conj(fresh->chirp[j]);
+        rc::fftDouble(fresh->kernel, false);
+        slot = std::move(fresh);
+    }
+    return slot;
+}
+
 std::vector<cd> rfftAny(const std::vector<double>& x, std::size_t n) {
     const std::size_t half = n / 2 + 1;
     std::vector<cd> out(half);
@@ -308,18 +335,13 @@ std::vector<cd> rfftAny(const std::vector<double>& x, std::size_t n) {
         std::copy(a.begin(), a.begin() + static_cast<std::ptrdiff_t>(half), out.begin());
         return out;
     }
-    const std::size_t m = pow2At(2 * n - 1);
-    std::vector<cd> chirp(n);
-    for (std::size_t j = 0; j < n; ++j) {
-        const unsigned long long jj = (static_cast<unsigned long long>(j) * j) % (2ULL * n);
-        chirp[j] = std::polar(1.0, -kPi * static_cast<double>(jj) / static_cast<double>(n));
-    }
-    std::vector<cd> a(m, cd(0, 0)), b(m, cd(0, 0));
+    const std::shared_ptr<const BluesteinPlan> plan = bluesteinPlan(n);
+    const std::size_t m = plan->m;
+    const std::vector<cd>& chirp = plan->chirp;
+    const std::vector<cd>& b = plan->kernel;
+    std::vector<cd> a(m, cd(0, 0));
     for (std::size_t j = 0; j < std::min(n, x.size()); ++j) a[j] = x[j] * chirp[j];
-    b[0] = std::conj(chirp[0]);
-    for (std::size_t j = 1; j < n; ++j) b[j] = b[m - j] = std::conj(chirp[j]);
     rc::fftDouble(a, false);
-    rc::fftDouble(b, false);
     for (std::size_t i = 0; i < m; ++i) a[i] *= b[i];
     rc::fftDouble(a, true);
     for (std::size_t k = 0; k < half; ++k) out[k] = a[k] * chirp[k];

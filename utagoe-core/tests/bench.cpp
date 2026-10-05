@@ -77,7 +77,6 @@ int main(int argc, char** argv) {
         {"model ensemble (v3 align)",    [](Settings& s) { s.mergeMode = MergeMode::ByWaveform; s.waveModel = WaveModel::Ensemble; }, false},
         {"model robust (GCC)",           [](Settings& s) { s.mergeMode = MergeMode::ByWaveform; s.waveModel = WaveModel::Robust; s.waveAlign = WaveAlign::Gcc; }, false},
         {"model kalman (GCC)",           [](Settings& s) { s.mergeMode = MergeMode::ByWaveform; s.waveModel = WaveModel::Kalman; s.waveAlign = WaveAlign::Gcc; }, false},
-        {"model hammerstein (GCC)",      [](Settings& s) { s.mergeMode = MergeMode::ByWaveform; s.waveModel = WaveModel::Hammerstein; s.waveAlign = WaveAlign::Gcc; }, false},
         {"model nmf (GCC)",              [](Settings& s) { s.mergeMode = MergeMode::ByWaveform; s.waveModel = WaveModel::Nmf; s.waveAlign = WaveAlign::Gcc; }, false},
         {"model spatial (GCC)",          [](Settings& s) { s.mergeMode = MergeMode::ByWaveform; s.waveModel = WaveModel::Spatial; s.waveAlign = WaveAlign::Gcc; }, false},
         {"model ensemble (GCC)",         [](Settings& s) { s.mergeMode = MergeMode::ByWaveform; s.waveModel = WaveModel::Ensemble; s.waveAlign = WaveAlign::Gcc; }, false},

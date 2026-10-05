@@ -8,13 +8,13 @@
 // bit exact が必要になったら run() を split-radix の忠実な実装へ差し替える。周辺 API はそのままでよい。
 
 #include "fft.h"
+#include "mathconst.h"
 
 #include <cmath>
 
 namespace utagoe {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 
 }
 

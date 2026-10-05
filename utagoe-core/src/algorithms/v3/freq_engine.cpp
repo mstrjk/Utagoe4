@@ -6,6 +6,7 @@
 // 足し込みの順番と丸めが同じなので、結果は 1 sample ずつ処理した場合と一致する。
 
 #include "freq_engine.h"
+#include "mathconst.h"
 #include "parallel.h"
 #include "gpu.h"
 #include "x87.h"
@@ -17,7 +18,6 @@
 namespace utagoe {
 namespace {
 
-constexpr double kPi = 3.14159265358979323846;
 constexpr int kBatch = 64;   // 一度に計算する frame 数。項の保存領域の大きさを決める。
 
 // 位相差を [0, PI] に wrap する。

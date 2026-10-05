@@ -7,6 +7,7 @@
 #include "dr_wav.h"
 #include "dr_mp3.h"
 #include "FLAC/stream_decoder.h"
+#define OV_EXCLUDE_STATIC_CALLBACKS
 #include "vorbis/vorbisfile.h"
 #include "opusfile.h"
 
@@ -215,13 +216,19 @@ bool decodeMp3(const std::string& path, AudioBuffer* out, AudioInfo& info, std::
 }
 
 
+size_t vorbisRead(void* ptr, size_t size, size_t count, void* f) { return std::fread(ptr, size, count, static_cast<std::FILE*>(f)); }
+int vorbisSeek(void* f, ogg_int64_t offset, int whence) { return f ? _fseeki64(static_cast<std::FILE*>(f), offset, whence) : -1; }
+int vorbisClose(void* f) { return std::fclose(static_cast<std::FILE*>(f)); }
+long vorbisTell(void* f) { return static_cast<long>(_ftelli64(static_cast<std::FILE*>(f))); }
+const ov_callbacks kVorbisFile = {vorbisRead, vorbisSeek, vorbisClose, vorbisTell};
+
 bool decodeVorbis(const std::string& path, AudioBuffer* out, AudioInfo& info, std::string& error) {
     std::FILE* f = openFile(path, "rb");
     if (!f) { error = "cannot open " + path; return false; }
 
     OggVorbis_File vf;
     // 既定 callback は ov_clear で FILE* も閉じる。
-    if (ov_open_callbacks(f, &vf, nullptr, 0, OV_CALLBACKS_DEFAULT) != 0) {
+    if (ov_open_callbacks(f, &vf, nullptr, 0, kVorbisFile) != 0) {
         std::fclose(f);
         error = "not a readable Ogg Vorbis file";
         return false;

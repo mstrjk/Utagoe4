@@ -4,8 +4,8 @@
 #include "gpu.h"
 #include "log.h"
 #include "parallel.h"
-#include "algorithms/upmix/upmix.h"
 #include "fileio.h"
+#include "stepcache.h"
 
 #include <FLAC/format.h>
 #include <opus.h>
@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <initializer_list>
 #include <string>
 
@@ -73,24 +74,20 @@ void toCpp(const UtagoeSettings& c, Settings& s) {
     s.gpuMode         = c.gpuMode == 1 ? GpuMode::Fastest : GpuMode::Exact;
     s.gpuNoticeHidden = c.gpuNoticeHidden != 0;
 
-    s.waveModel = (c.waveModel >= 0 && c.waveModel <= 13) ? static_cast<WaveModel>(c.waveModel) : WaveModel::V3;
+    s.waveModel = waveModelFromInt(c.waveModel);
     s.waveAlign = (c.waveAlign >= 0 && c.waveAlign <= 2) ? static_cast<WaveAlign>(c.waveAlign) : WaveAlign::V3Block;
     s.fitSpans.assign(c.fitSpans, strnlen(c.fitSpans, UTAGOE_SPANS_MAX));
-    s.outputKind = (c.outputKind >= 0 && c.outputKind <= 4) ? static_cast<OutputKind>(c.outputKind) : OutputKind::Vocal;
-    s.centerMethod = (c.centerMethod >= 0 && c.centerMethod <= 6) ? c.centerMethod : 1;
+    s.outputKind = (c.outputKind >= 0 && c.outputKind <= 1) ? static_cast<OutputKind>(c.outputKind) : OutputKind::Vocal;
     s.outputFolder.assign(c.outputFolder, strnlen(c.outputFolder, UTAGOE_PATH_MAX));
     s.appIcon.assign(c.appIcon, strnlen(c.appIcon, UTAGOE_NAME_MAX));
     s.uiLanguage.assign(c.uiLanguage, strnlen(c.uiLanguage, UTAGOE_NAME_MAX));
-    s.repeatGuide = (c.repeatGuide >= 0 && c.repeatGuide <= 2) ? c.repeatGuide : 0;
-    s.repeatBreadth = (c.repeatBreadth >= 0 && c.repeatBreadth <= 1) ? c.repeatBreadth : 0;
     s.overwriteOutput = c.overwriteOutput != 0;
     s.matchBandwidth = c.matchBandwidth != 0;
-    s.upmixMethod = (c.upmixMethod >= 0 && c.upmixMethod <= 9) ? c.upmixMethod : 3;
-    s.upmixSevenOne = c.upmixSevenOne != 0;
-    s.upmixLfe = c.upmixLfe != 0;
     s.normalizeOutput = c.normalizeOutput != 0;
     s.matchLowEnd = c.matchLowEnd != 0;
     s.removeSubsonic = c.removeSubsonic != 0;
+    s.waveFft = validFft(c.waveFft);
+    s.cacheSteps = c.cacheSteps != 0;
     s.freqModel = (c.freqModel >= 0 && c.freqModel <= 2) ? c.freqModel : 0;
     s.saveMask = (c.saveMask & (kSaveDefault | kSaveAligned | kSaveRaw | kSaveMembers)) ? c.saveMask & 15 : kSaveDefault;
 }
@@ -139,17 +136,13 @@ void toC(const Settings& s, UtagoeSettings& c) {
     copyString(c.outputFolder, UTAGOE_PATH_MAX, s.outputFolder);
     copyString(c.appIcon, UTAGOE_NAME_MAX, s.appIcon);
     copyString(c.uiLanguage, UTAGOE_NAME_MAX, s.uiLanguage);
-    c.centerMethod = s.centerMethod;
-    c.repeatGuide = s.repeatGuide;
-    c.repeatBreadth = s.repeatBreadth;
     c.overwriteOutput = s.overwriteOutput ? 1 : 0;
     c.matchBandwidth = s.matchBandwidth ? 1 : 0;
-    c.upmixMethod = s.upmixMethod;
-    c.upmixSevenOne = s.upmixSevenOne ? 1 : 0;
-    c.upmixLfe = s.upmixLfe ? 1 : 0;
     c.normalizeOutput = s.normalizeOutput ? 1 : 0;
     c.matchLowEnd = s.matchLowEnd ? 1 : 0;
     c.removeSubsonic = s.removeSubsonic ? 1 : 0;
+    c.waveFft = s.waveFft;
+    c.cacheSteps = s.cacheSteps ? 1 : 0;
     c.freqModel = s.freqModel;
     c.saveMask = s.saveMask;
 }
@@ -214,19 +207,75 @@ const char* methodName(const Settings& s) {
     switch (s.waveModel) {
     case WaveModel::Robust: return "Waveform / Robust";
     case WaveModel::Kalman: return "Waveform / Kalman";
-    case WaveModel::Hammerstein: return "Waveform / Hammerstein";
     case WaveModel::Nmf: return "Waveform / NMF";
     case WaveModel::Spatial: return "Waveform / Spatial";
-    case WaveModel::Ensemble: return "Waveform / Ensemble Small";
-    case WaveModel::Rational: return "Waveform / Rational";
+    case WaveModel::Ensemble: return "Waveform / Ensemble";
     case WaveModel::Surface: return "Waveform / Surface";
-    case WaveModel::Trend: return "Waveform / Trend";
-    case WaveModel::Ctf: return "Waveform / CTF";
     case WaveModel::LowRank: return "Waveform / Low-rank";
-    case WaveModel::EnsembleLarge: return "Waveform / Ensemble Large";
-    case WaveModel::Auto: return "Waveform / Auto";
     default: return "Waveform";
     }
+}
+
+void writeInfo(stepcache::Writer& w, const AudioInfo& i) {
+    w.str(i.codec);
+    w.i64(i.sampleRate);
+    w.i64(i.channels);
+    w.i64(i.bits);
+    w.i64(i.floatingPoint);
+    w.i64(i.lossless);
+    w.i64(i.bitrateKbps);
+    w.i64(i.frames);
+}
+
+AudioInfo readInfo(stepcache::Reader& r) {
+    AudioInfo i;
+    i.codec = r.str();
+    i.sampleRate = static_cast<int>(r.i64());
+    i.channels = static_cast<int>(r.i64());
+    i.bits = static_cast<int>(r.i64());
+    i.floatingPoint = r.i64() != 0;
+    i.lossless = r.i64() != 0;
+    i.bitrateKbps = static_cast<int>(r.i64());
+    i.frames = r.i64();
+    return i;
+}
+
+bool decodeCached(const std::string& path, stepcache::Source from, AudioBuffer& out, AudioInfo& info, std::string& err) {
+    std::string k;
+    if (stepcache::enabled()) {
+        std::error_code ec;
+#ifdef _WIN32
+        const std::filesystem::path p(widenUtf8(path));
+#else
+        const std::filesystem::path p(path);
+#endif
+        const auto size = std::filesystem::file_size(p, ec);
+        const auto stamp = ec ? 0 : std::filesystem::last_write_time(p, ec).time_since_epoch().count();
+        if (!ec) {
+            k = stepcache::key("decode", {static_cast<std::uint64_t>(size), static_cast<std::uint64_t>(stamp)}, path);
+            stepcache::Reader in;
+            if (stepcache::load("decode", from, k, in)) {
+                info = readInfo(in);
+                out.sampleRate = static_cast<int>(in.i64());
+                out.channels = static_cast<int>(in.i64());
+                out.samples = in.floats();
+                if (in.ok() && out.frames() > 0) {
+                    log::detail("  reused from the step cache");
+                    return true;
+                }
+            }
+        }
+    }
+    if (!decodeAudio(path, out, &info, err)) return false;
+    if (!k.empty()) {
+        stepcache::Writer w;
+        writeInfo(w, info);
+        w.i64(out.sampleRate);
+        w.i64(out.channels);
+        w.floats(out.samples);
+        stepcache::save("decode", from, k, w);
+    }
+    return true;
 }
 
 int32_t extractFileImpl(
@@ -247,27 +296,22 @@ int32_t extractFileImpl(
 
     Settings s;
     toCpp(*settings, s);
+    stepcache::configure(s.cacheSteps);
+    stepcache::setSources(originalPath, instrumentalPath);
 
     log::line("original     %s", originalPath);
-    const bool split = s.outputKind == OutputKind::CenterSides;
-    const bool repeats = s.outputKind == OutputKind::Repeats;
-    const bool upmixKind = s.outputKind == OutputKind::Upmix;
-    const bool upmixRef = upmixKind && upmix::needsReference(static_cast<upmix::Method>(std::clamp(s.upmixMethod, 0, upmix::kMethods - 1)));
-    if ((!split && !repeats && !upmixKind) || upmixRef) log::line("instrumental %s", instrumentalPath);
+    log::line("instrumental %s", instrumentalPath);
     if (s.outputKind == OutputKind::Vocal) {
         int m = s.saveMask & (kSaveDefault | kSaveAligned | kSaveRaw | kSaveMembers);
         const bool members = s.mergeMode == MergeMode::ByWaveform &&
-                             (s.waveModel == WaveModel::Ensemble || s.waveModel == WaveModel::EnsembleLarge || s.waveModel == WaveModel::Auto);
+                             s.waveModel == WaveModel::Ensemble;
         if (!members) m &= ~kSaveMembers;
         s.saveMask = m ? m : kSaveDefault;
         if (s.saveMask == kSaveAligned) s.outputKind = OutputKind::AlignedPair;
     }
     const bool pair = s.outputKind == OutputKind::AlignedPair;
     std::string mainOut, instOut;
-    if (upmixKind) {
-        outputPaths(outputPath, s.outputKind, mainOut, instOut);
-        log::line("output       %s", mainOut.c_str());
-    } else if (pair || split || repeats) {
+    if (pair) {
         outputPaths(outputPath, s.outputKind, mainOut, instOut);
         log::line("output       %s", mainOut.c_str());
         log::line("             %s", instOut.c_str());
@@ -285,7 +329,7 @@ int32_t extractFileImpl(
     std::string err;
     {
         log::Stage st("decode original");
-        if (!decodeAudio(originalPath, orig, &origInfo, err)) {
+        if (!decodeCached(originalPath, stepcache::Source::Original, orig, origInfo, err)) {
             st.fail();
             setError(errorBuf, errorLen, "Original: " + err);
             log::error("cannot read the original: " + err, "");
@@ -293,172 +337,6 @@ int32_t extractFileImpl(
         }
         log::detail("original: %s", describe(origInfo, orig).c_str());
     }
-    if (split) {
-        const OutputFormat format = formatFromExtension(outputPath, s.outputFormat);
-        const OutputDepth depth = resolveDepth(s.outputDepth, format, origInfo, origInfo);
-        ProgressBridge bridge{progress, progressUser};
-        ExtractResult r = extractCenterSides(orig, s, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr);
-        if (r.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
-        if (!r.error.empty()) { setError(errorBuf, errorLen, r.error); log::error(r.error, ""); return 5; }
-        if (!beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
-        normalise(s, format, {&r.vocal, &r.alignedInst}, "centre + sides");
-        EncodeOptions enc;
-        enc.format = format;
-        enc.depth = depth;
-        enc.bitrate = s.outputBitrate;
-        const std::pair<const std::string*, const AudioBuffer*> outs[] = {{&mainOut, &r.vocal}, {&instOut, &r.alignedInst}};
-        const char* what[] = {"centre", "sides"};
-        for (int k = 0; k < 2; ++k) {
-            log::Stage st(std::string("encode ") + what[k] + " " + extensionOf(format));
-            if (!encodeAudio(*outs[k].first, *outs[k].second, enc, err)) {
-                st.fail();
-                setError(errorBuf, errorLen, "Output: " + err);
-                log::error("cannot write " + *outs[k].first + ": " + err, "");
-                return 6;
-            }
-        }
-        if (result) {
-            std::memset(result, 0, sizeof *result);
-            copyString(result->debug, sizeof result->debug, r.alignment.debugString());
-            result->outputFormat   = static_cast<int32_t>(format);
-            result->outputDepth    = static_cast<int32_t>(depth);
-            result->outputRate     = r.vocal.sampleRate;
-            result->outputChannels = r.vocal.channels;
-            result->instrumentalRateIn     = r.vocal.sampleRate;
-            result->instrumentalChannelsIn = r.vocal.channels;
-        }
-        return 0;
-    }
-
-    if (upmixKind) {
-        AudioBuffer inst;
-        AudioInfo instInfo;
-        if (upmixRef) {
-            log::Stage st("decode instrumental");
-            if (!decodeAudio(instrumentalPath, inst, &instInfo, err)) {
-                st.fail();
-                setError(errorBuf, errorLen, "Instrumental: " + err);
-                log::error("cannot read the instrumental: " + err, "");
-                return 3;
-            }
-            log::detail("instrumental: %s", describe(instInfo, inst).c_str());
-        }
-        ProgressBridge bridge{progress, progressUser};
-        ExtractResult r = extractUpmix(orig, upmixRef ? &inst : nullptr, s, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr,
-                                       &origInfo, upmixRef ? &instInfo : nullptr);
-        if (r.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
-        if (!r.error.empty()) { setError(errorBuf, errorLen, r.error); log::error(r.error, ""); return 5; }
-        const OutputFormat format = formatFromExtension(mainOut, OutputFormat::Wav);
-        const OutputDepth depth = resolveDepth(s.outputDepth, format, origInfo, origInfo);
-        if (!beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
-        normalise(s, format, {&r.vocal}, "upmix");
-        EncodeOptions enc;
-        enc.format = format;
-        enc.depth = depth;
-        enc.bitrate = s.outputBitrate;
-        {
-            log::Stage st(std::string("encode ") + std::to_string(r.vocal.channels) + "-channel upmix " + extensionOf(format));
-            if (!encodeAudio(mainOut, r.vocal, enc, err)) {
-                st.fail();
-                setError(errorBuf, errorLen, "Output: " + err);
-                log::error("cannot write " + mainOut + ": " + err, "");
-                return 6;
-            }
-        }
-        if (result) {
-            std::memset(result, 0, sizeof *result);
-            copyString(result->debug, sizeof result->debug, r.alignment.debugString());
-            result->outputFormat   = static_cast<int32_t>(format);
-            result->outputDepth    = static_cast<int32_t>(depth);
-            result->outputRate     = r.vocal.sampleRate;
-            result->outputChannels = r.vocal.channels;
-            result->instrumentalRateIn     = r.vocal.sampleRate;
-            result->instrumentalChannelsIn = r.vocal.channels;
-        }
-        return 0;
-    }
-
-    if (repeats) {
-        const OutputFormat format = formatFromExtension(outputPath, s.outputFormat);
-        const OutputDepth depth = resolveDepth(s.outputDepth, format, origInfo, origInfo);
-        const std::string ext = extensionOf(format);
-        const std::wstring wdir = longPath(widenUtf8(mainOut));
-        if (!beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
-        if (!CreateDirectoryW(wdir.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) {
-            setError(errorBuf, errorLen, "Output: cannot create the folder " + mainOut);
-            log::error("cannot create " + mainOut, "");
-            return 6;
-        }
-        {
-            WIN32_FIND_DATAW fd;
-            const HANDLE h = FindFirstFileW((wdir + L"\\*").c_str(), &fd);
-            if (h != INVALID_HANDLE_VALUE) {
-                do {
-                    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
-                    std::wstring name = fd.cFileName;
-                    const std::size_t dot = name.find_last_of(L'.');
-                    const std::wstring stem = dot == std::wstring::npos ? name : name.substr(0, dot);
-                    auto ends = [&](const std::wstring& t) { return stem.size() >= t.size() && stem.compare(stem.size() - t.size(), t.size(), t) == 0; };
-                    const bool ours = stem.size() > 3 && iswdigit(stem[0]) && iswdigit(stem[1]) && stem[2] == L'_' && (ends(L"_shared") || ends(L"_difference"));
-                    if (ours) DeleteFileW((wdir + L"\\" + name).c_str());
-                } while (FindNextFileW(h, &fd));
-                FindClose(h);
-            }
-        }
-        EncodeOptions enc;
-        enc.format = format;
-        enc.depth = depth;
-        enc.bitrate = s.outputBitrate;
-        std::string writeError;
-        auto sink = [&](RepeatClip& c) {
-            normalise(s, format, {&c.shared, &c.difference}, c.name.c_str());
-            const std::pair<const char*, const AudioBuffer*> outs[] = {{"_shared", &c.shared}, {"_difference", &c.difference}};
-            for (const auto& [suffix, buf] : outs) {
-                const std::string path = mainOut + "\\" + c.name + suffix + ext;
-                if (!encodeAudio(path, *buf, enc, err)) {
-                    writeError = "cannot write " + path + ": " + err;
-                    return false;
-                }
-            }
-            log::detail("  %s  %.2f dB", c.name.c_str(), c.reductionDb);
-            return true;
-        };
-        ProgressBridge bridge{progress, progressUser};
-        RepeatsResult r = extractRepeats(orig, s, sink, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr);
-        if (!writeError.empty()) { setError(errorBuf, errorLen, "Output: " + writeError); log::error(writeError, ""); return 6; }
-        if (r.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
-        if (!r.error.empty()) { setError(errorBuf, errorLen, r.error); log::error(r.error, ""); return 5; }
-        std::FILE* f = openFile(instOut, "wb");
-        if (!f) {
-            setError(errorBuf, errorLen, "Output: cannot write " + instOut);
-            log::error("cannot write " + instOut, "");
-            return 6;
-        }
-        std::fprintf(f, "file,status,quality,later_start_s,earlier_start_s,duration_s,held_out_reduction_db,correlation,guide,delay_ms,rate_ppm\r\n");
-        int passed = 0;
-        for (const RepeatClip& c : r.clips) {
-            passed += c.passed;
-            char earlier[32] = "";
-            if (!c.joint) std::snprintf(earlier, sizeof earlier, "%.3f", c.source);
-            std::fprintf(f, "%s,%s,%s,%.3f,%s,%.3f,%.3f,%.4f,%s,%.3f,%.2f\r\n", c.passed ? c.name.c_str() : "", c.status.c_str(), c.quality.c_str(), c.target,
-                         earlier, c.duration, c.reductionDb, c.correlation, c.guide.c_str(), c.delayMs, c.ratePpm);
-        }
-        std::fclose(f);
-        if (result) {
-            std::memset(result, 0, sizeof *result);
-            char buf[160];
-            std::snprintf(buf, sizeof buf, "repeats: %d checked, %d passed", static_cast<int>(r.clips.size()), passed);
-            copyString(result->debug, sizeof result->debug, buf);
-            result->outputFormat   = static_cast<int32_t>(format);
-            result->outputDepth    = static_cast<int32_t>(depth);
-            result->outputRate     = orig.sampleRate;
-            result->outputChannels = std::min(orig.channels, 2);
-            result->instrumentalRateIn     = result->outputRate;
-            result->instrumentalChannelsIn = result->outputChannels;
-        }
-        return 0;
-    }
-
     // 元実装に合わせて、両方に同じファイルを指定したら後処理だけを掛ける。
     const bool same = sameFile(originalPath, instrumentalPath);
     if (same && pair) {
@@ -471,7 +349,7 @@ int32_t extractFileImpl(
         log::line("the same file is used for both inputs: post-processing only");
     } else {
         log::Stage st("decode instrumental");
-        if (!decodeAudio(instrumentalPath, inst, &instInfo, err)) {
+        if (!decodeCached(instrumentalPath, stepcache::Source::Instrumental, inst, instInfo, err)) {
             st.fail();
             setError(errorBuf, errorLen, "Instrumental: " + err);
             log::error("cannot read the instrumental: " + err, "");
@@ -510,7 +388,7 @@ int32_t extractFileImpl(
 
     if (!beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
     if ((s.saveMask & kSaveMembers) && !pair && !same && std::none_of(r.extras.begin(), r.extras.end(), [](const auto& e) { return e.first != "_raw"; }))
-        log::warn("no ensemble members to save: only Ensemble Small, Ensemble Large and Auto have them");
+        log::warn("no ensemble members to save: only Ensemble has them");
     EncodeOptions enc;
     enc.format = format;
     enc.depth = depth;
@@ -618,14 +496,6 @@ UTAGOE_API void UTAGOE_CALL utagoe_aligned_pair_paths(const char* outputPath, ch
     if (instBuf) copyString(instBuf, static_cast<std::size_t>(len), i);
 }
 
-UTAGOE_API void UTAGOE_CALL utagoe_output_paths(const char* outputPath, int32_t kind, char* firstBuf, char* secondBuf, int32_t len) {
-    if (!outputPath || len <= 0) return;
-    std::string a, b;
-    outputPaths(outputPath, kind == 2 ? OutputKind::CenterSides : kind == 3 ? OutputKind::Repeats : kind == 4 ? OutputKind::Upmix : OutputKind::AlignedPair, a, b);
-    if (firstBuf) copyString(firstBuf, static_cast<std::size_t>(len), a);
-    if (secondBuf) copyString(secondBuf, static_cast<std::size_t>(len), b);
-}
-
 UTAGOE_API int32_t UTAGOE_CALL utagoe_probe_audio(const char* path, UtagoeAudioInfo* info,
                                                   char* errorBuf, int32_t errorLen) {
     if (!path || !info) { setError(errorBuf, errorLen, "null argument"); return 1; }
@@ -705,6 +575,10 @@ UTAGOE_API int32_t UTAGOE_CALL utagoe_check_spans(const char* text, char* errorB
 
 UTAGOE_API void UTAGOE_CALL utagoe_set_log(UtagoeLog fn, void* user) {
     log::setCallback(fn, user);
+}
+
+UTAGOE_API void UTAGOE_CALL utagoe_clear_step_cache(void) {
+    stepcache::clear();
 }
 
 UTAGOE_API void UTAGOE_CALL utagoe_set_log_dir(const char* dir) {

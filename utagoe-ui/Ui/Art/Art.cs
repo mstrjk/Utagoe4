@@ -1,0 +1,94 @@
+using System.Drawing.Imaging;
+using System.Reflection;
+
+namespace Utagoe.Ui;
+
+internal static class Art
+{
+    private static readonly Dictionary<string, Bitmap> Sheets = new();
+    private static readonly Dictionary<(string, Rectangle), Bitmap> Pieces = new();
+
+    private static readonly string[] ButtonRoles = { "check", "x", "question", "folder", "play", "settings", "info", "close", "reset", "start", "book" };
+    private static readonly string[] ButtonThemes = { "army", "ice", "silver", "wine" };
+    private static readonly string[] MediaButtons = { "MPPLAY", "MPPAUSE", "MPSTOP", "MPPREV" };
+    private static readonly (int Enabled, int Disabled)[] MediaWidths = { (17, 17), (13, 12), (17, 17), (20, 20) };
+
+    private static Bitmap Sheet(string name)
+    {
+        if (Sheets.TryGetValue(name, out var cached)) return cached;
+        using var s = Assembly.GetExecutingAssembly().GetManifestResourceStream($"Utagoe.Resources.{name}.bmp")
+                      ?? throw new FileNotFoundException($"embedded bitmap '{name}' is missing");
+        using var r = new BinaryReader(s);
+        byte[] all = r.ReadBytes((int)s.Length);
+        int offset = BitConverter.ToInt32(all, 10);
+        int width = BitConverter.ToInt32(all, 18), height = BitConverter.ToInt32(all, 22);
+        bool bottomUp = height > 0;
+        height = Math.Abs(height);
+        var bmp = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        var data = bmp.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+        for (int y = 0; y < height; y++)
+        {
+            int row = bottomUp ? height - 1 - y : y;
+            System.Runtime.InteropServices.Marshal.Copy(all, offset + row * width * 4, data.Scan0 + y * data.Stride, width * 4);
+        }
+        bmp.UnlockBits(data);
+        return Sheets[name] = bmp;
+    }
+
+    private static Bitmap Piece(string sheet, Rectangle area)
+    {
+        if (Pieces.TryGetValue((sheet, area), out var cached)) return cached;
+        return Pieces[(sheet, area)] = Sheet(sheet).Clone(area, PixelFormat.Format32bppArgb);
+    }
+
+    private static int ThemeIndex(string theme)
+    {
+        int i = Array.IndexOf(App.AppIcons.Names, theme);
+        return i < 0 ? 0 : i;
+    }
+
+    public static Bitmap AppIconArt(string theme) => Piece("appicons", new Rectangle(90 * ThemeIndex(theme), 0, 90, 90));
+
+    public static Bitmap ThemeLogo() => Piece("logos", new Rectangle(0, 83 * ThemeIndex(App.Theme.Current.Name), 248, 83));
+
+    public static (Bitmap Enabled, Bitmap Disabled) Button(string role)
+    {
+        string theme = App.Theme.Current.Name switch { "standard" => "wine", var t => t };
+        int row = Math.Max(0, Array.IndexOf(ButtonThemes, theme));
+        int col = Array.IndexOf(ButtonRoles, role);
+        if (col < 0) throw new ArgumentException($"unknown button glyph '{role}'");
+        bool large = role is "check" or "x" or "question" or "reset";
+        int w = large ? 18 : 16, h = large ? 18 : 16;
+        return (Piece("buttons", new Rectangle(36 * col, 18 * row, w, h)),
+                Piece("buttons", new Rectangle(36 * col + w, 18 * row, w, h)));
+    }
+
+    public static (Bitmap Enabled, Bitmap Disabled) Media(string name)
+    {
+        int i = Array.IndexOf(MediaButtons, name);
+        if (i < 0) throw new ArgumentException($"unknown media glyph '{name}'");
+        int y = 18 * ButtonThemes.Length;
+        return (Piece("buttons", new Rectangle(40 * i, y, MediaWidths[i].Enabled, 16)),
+                Piece("buttons", new Rectangle(40 * i + 20, y, MediaWidths[i].Disabled, 16)));
+    }
+
+    private const int ProcessCell = 52, ProcessRow = 20;
+    private static readonly (string Name, int Width, int Height)[] ProcessIcons =
+    {
+        ("frequency", 32, 15), ("waveform", 49, 15), ("centresides", 40, 16), ("repeats", 29, 17),
+        ("upmix", 32, 17), ("output", 31, 15), ("recovery", 16, 16), ("truncate", 16, 13),
+        ("pitchshift", 28, 16), ("denoise", 26, 15), ("vocaldenoise", 18, 16), ("dehum", 17, 16),
+        ("declick", 27, 15), ("decrackle", 27, 16), ("debreath", 19, 16), ("debleed", 28, 15),
+    };
+
+    public static Bitmap ProcessIcon(string name)
+    {
+        int i = Array.FindIndex(ProcessIcons, p => p.Name == name);
+        if (i < 0) throw new ArgumentException($"unknown processing icon '{name}'");
+        var (_, w, h) = ProcessIcons[i];
+        int row = Math.Max(0, Array.IndexOf(App.AppIcons.Names, App.Theme.Current.Name));
+        return Piece("processicons", new Rectangle(ProcessCell * i, ProcessRow * row, w, h));
+    }
+
+    public static Icon AppIcon => App.AppIcons.CurrentIcon;
+}

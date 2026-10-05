@@ -37,7 +37,7 @@ struct Config {
 
     int    robustIterations = 5;
     double ridge = 0.001;
-    double huberDelta = 1.5;
+    double huberDelta = 0.2;
     double smoothBins = 1.0;
     double nonlinearRidge = 0.08;
     double nonlinearMaxRelativeRms = 0.35;
@@ -50,7 +50,7 @@ struct Config {
     double maskFloorDb = -30.0;
     int    covarianceFrames = 23;
     double covarianceLoading = 0.02;
-    double ensembleStrength = 0.5;
+    double ensembleStrength = 1.0;
     bool   keepMembers = false;
     uint64_t seed = 0;
 };
@@ -102,6 +102,8 @@ double besselI0(double x);
 
 // 倍精度の複素 FFT (長さは 2 のべき乗)。位置合わせの相互相関で使う。
 void fftDouble(std::vector<cd>& a, bool inverse);
+const std::vector<cd>& fftTwiddles(std::size_t n, bool inverse);
+void fftDoubleMany(const std::vector<std::vector<cd>*>& arrays, bool inverse);
 
 // 1. Huber-IRLS 複素 MIMO ridge 回帰。x [F,T,D], y [F,T,O]。
 Transfer fitTransfer(const Spec& x, const Spec& y, const Config& cfg,

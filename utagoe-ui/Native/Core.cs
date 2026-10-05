@@ -70,20 +70,11 @@ internal unsafe struct CoreSettings
     public const int NameMax = 32;
     public fixed byte AppIconBytes[NameMax];
 
-    public int CenterMethod;
-
     public fixed byte LanguageBytes[NameMax];
-
-    public int RepeatGuide;
-    public int RepeatBreadth;
 
     public int OverwriteOutput;
 
     public int MatchBandwidth;
-
-    public int UpmixMethod;
-    public int UpmixSevenOne;
-    public int UpmixLfe;
 
     public int NormalizeOutput;
 
@@ -91,6 +82,8 @@ internal unsafe struct CoreSettings
     public int RemoveSubsonic;
     public int FreqModel;
     public int SaveMask;
+    public int WaveFft;
+    public int CacheSteps;
 
     public string Language
     {
@@ -322,6 +315,9 @@ internal static class Core
 {
     private const string Dll = "utagoe_core.dll";
 
+    [DllImport(Dll, EntryPoint = "utagoe_clear_step_cache")]
+    public static extern void ClearStepCache();
+
     [DllImport(Dll, EntryPoint = "utagoe_default_settings")]
     public static extern void DefaultSettings(out CoreSettings s);
 
@@ -350,10 +346,6 @@ internal static class Core
     [DllImport(Dll, EntryPoint = "utagoe_aligned_pair_paths")]
     private static extern void AlignedPairPathsRaw([MarshalAs(UnmanagedType.LPUTF8Str)] string output,
                                                    byte[] mainBuf, byte[] instBuf, int len);
-
-    [DllImport(Dll, EntryPoint = "utagoe_output_paths")]
-    private static extern void OutputPathsRaw([MarshalAs(UnmanagedType.LPUTF8Str)] string output, int kind,
-                                              byte[] firstBuf, byte[] secondBuf, int len);
 
     [DllImport(Dll, EntryPoint = "utagoe_format_extension")]
     private static extern IntPtr FormatExtensionRaw(int format);
@@ -450,14 +442,6 @@ internal static class Core
         (OutputFormat)FormatFromPathRaw(path, (int)fallback);
 
     /// 揃えた組を出力するときに書く 2 つの path (core と同じ規則)。
-    public static (string First, string Second) OutputPaths(string output, int kind)
-    {
-        var a = new byte[4096];
-        var b = new byte[4096];
-        OutputPathsRaw(output, kind, a, b, a.Length);
-        return (CString(a), CString(b));
-    }
-
     public static (string Main, string Inst) AlignedPairPaths(string output)
     {
         var m = new byte[4096];

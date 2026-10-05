@@ -1,4 +1,3 @@
-# build 生成物。ローカルの絶対 path を含むので追跡しない。
 bin/
 obj/
 utagoe-core/build/
@@ -7,19 +6,32 @@ utagoe-core/build/
 
 *.md
 !/README.md
+
 utagoe-core/tests/*_dump.py
 utagoe-core/tests/*_parity.cpp
 utagoe-ui/Reference/
+test/
 
-# 同梱ライブラリの source は deps.ps1 が版と SHA-256 を固定して取得する。Git には入れない。
 third_party/
 .deps-cache/
-
 dist/
 
-# 例外: 移植元などの license 文書は英語でも必ず残す。
+# 移植元などのライセンス文書は必ず残す。
 !licenses/**/LICENSE*
-**__pycache__
-research/
+
+__pycache__/
+*.py[cod]
+
+research/*
+
 *.ini
+
 Visuals/Unused/
+Visuals/AudioProcessingIcons/
+
+# 廃止した機能の保管場所。
+Removed/
+
+# コード署名の資格情報。
+signing.env
+sign.ps1
