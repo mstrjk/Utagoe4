@@ -1,4 +1,5 @@
 #include "hp_grid.h"
+#include "cancel.h"
 #include "parallel.h"
 
 #include <algorithm>
@@ -18,6 +19,7 @@ Spec phaseSurface(const Spec& Y, const Spec& X, double sr, int nFft, int hop) {
     const double floorv = std::max(meanOf(power) * 1e-5, 1e-12);
     CGrid h(F, T, cd(1, 0));
     for (int it = 0; it < 3; ++it) {
+        if (cancel::requested()) return scaleBy(X, h);
         Grid errPow(F, T), wpow(F, T);
         CGrid wcross(F, T);
         std::vector<double> errAbs(power.v.size());
@@ -27,14 +29,17 @@ Spec phaseSurface(const Spec& Y, const Spec& X, double sr, int nFft, int hop) {
             errPow.v[i] = errAbs[i] * errAbs[i];
         }
         smooth(errPow, 2.0, std::max(2.0, 0.25 * sr / hop));
+        if (cancel::requested()) return scaleBy(X, h);
         for (std::size_t i = 0; i < power.v.size(); ++i) {
             const double scale = std::sqrt(errPow.v[i] + floorv);
             const double w = std::min(1.0, 1.5 * scale / (errAbs[i] + floorv));
             wpow.v[i] = w * power.v[i];
             wcross.v[i] = w * (ys.v[i] - xs.v[i]) * std::conj(xs.v[i]);
         }
+        if (cancel::requested()) return scaleBy(X, h);
         Grid p = donut(wpow, wide, gap);
         smooth(p, 1.2, 0);
+        if (cancel::requested()) return scaleBy(X, h);
         CGrid cross = donut(wcross, wide, gap);
         smooth(cross, 1.2, 0);
         const std::vector<double> pm = rowMean(p);
@@ -52,6 +57,7 @@ Spec phaseSurface(const Spec& Y, const Spec& X, double sr, int nFft, int hop) {
         py.v[i] = std::norm(ys.v[i]);
         yx.v[i] = ys.v[i] * std::conj(xs.v[i]);
     }
+    if (cancel::requested()) return scaleBy(X, h);
     Grid powerY = donut(py, wide, gap);
     smooth(powerY, 1.2, 0);
     Grid powerX = donut(power, wide, gap);

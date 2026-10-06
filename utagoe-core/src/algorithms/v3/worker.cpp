@@ -3,6 +3,7 @@
 // quantize のとき、x87 が拡張精度で計算して整数へ丸める箇所は long double で評価してから丸める。
 
 #include "engine.h"
+#include "cancel.h"
 #include "parallel.h"
 #include "gpu.h"
 
@@ -33,6 +34,7 @@ void Sink::write(const float* src, int frames) {
 }
 
 bool Context::poll(double fraction) {
+    if (cancel::requested()) cancelled = true;
     if (cancelled) return false;
     if (progress) {
         const double f = std::clamp(fraction, 0.0, 1.0);

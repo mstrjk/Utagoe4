@@ -207,6 +207,7 @@ UTAGOE_API void UTAGOE_CALL utagoe_set_log(UtagoeLog fn, void* user);
 // crash 記録 (この DLL 群の中のアクセス違反など) を書く folder。UTF-8。
 UTAGOE_API void UTAGOE_CALL utagoe_set_log_dir(const char* dir);
 UTAGOE_API void UTAGOE_CALL utagoe_clear_step_cache(void);
+UTAGOE_API void UTAGOE_CALL utagoe_cancel(void);
 
 // build と同梱ライブラリの版。複数行の UTF-8。
 UTAGOE_API const char* UTAGOE_CALL utagoe_build_info(void);

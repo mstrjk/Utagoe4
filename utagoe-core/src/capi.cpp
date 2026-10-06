@@ -1,6 +1,7 @@
 // C++ コアを C ABI で包む薄いラッパー。
 
 #include "utagoe_c.h"
+#include "cancel.h"
 #include "gpu.h"
 #include "log.h"
 #include "parallel.h"
@@ -177,7 +178,12 @@ void normalise(const Settings& s, OutputFormat format, std::initializer_list<Aud
 bool progressTrampoline(float fraction, void* user) {
     auto* b = static_cast<ProgressBridge*>(user);
     if (b && fraction >= 0.0f) fraction = b->from + (b->to - b->from) * fraction;
-    return !b || !b->fn || b->fn(fraction, b->user) != 0;
+    if (cancel::requested()) return false;
+    if (b && b->fn && b->fn(fraction, b->user) == 0) {
+        cancel::request();
+        return false;
+    }
+    return true;
 }
 
 }
@@ -203,7 +209,8 @@ std::string describe(const AudioInfo& i, const AudioBuffer& a) {
 }
 
 const char* methodName(const Settings& s) {
-    if (s.mergeMode == MergeMode::ByFrequency) return "Frequency";
+    if (s.mergeMode == MergeMode::ByFrequency)
+        return s.freqModel == 1 ? "Frequency / NMF" : s.freqModel == 2 ? "Frequency / Spatial" : "Frequency / Utagoe v3";
     switch (s.waveModel) {
     case WaveModel::Robust: return "Waveform / Robust";
     case WaveModel::Kalman: return "Waveform / Kalman";
@@ -212,8 +219,52 @@ const char* methodName(const Settings& s) {
     case WaveModel::Ensemble: return "Waveform / Ensemble";
     case WaveModel::Surface: return "Waveform / Surface";
     case WaveModel::LowRank: return "Waveform / Low-rank";
-    default: return "Waveform";
+    default: return "Waveform / Utagoe v3";
     }
+}
+
+std::string describeMethod(const Settings& s) {
+    const bool pair = s.outputKind == OutputKind::AlignedPair;
+    const bool wave = s.mergeMode == MergeMode::ByWaveform;
+    const bool model = s.waveModel != WaveModel::V3;
+    const bool hardPair = s.waveModel == WaveModel::Surface || s.waveModel == WaveModel::LowRank;
+    const bool modelAligns = pair || (wave && model) || (!wave && s.freqModel > 0);
+    const bool v3Analysis = !(modelAligns && s.waveAlign != WaveAlign::V3Block);
+    std::string d = pair ? "Aligned pair" : methodName(s);
+    auto add = [&](const std::string& part) { d += " | " + part; };
+    if (modelAligns || !wave) {
+        const char* align = s.waveAlign == WaveAlign::Dense ? "dense time map" : s.waveAlign == WaveAlign::Gcc ? "cross-correlation" : "Utagoe v3 analysis";
+        add(std::string("alignment ") + align);
+    }
+    if (v3Analysis) {
+        add(s.procMode == ProcMode::Normal ? "normal" : s.procMode == ProcMode::LRDifference ? "L-R difference" : "mono");
+        static const char* const intro[] = {"automatic", "normal", "detailed", "none"};
+        add(std::string("intro ") + intro[std::clamp(static_cast<int>(s.introMode), 0, 3)]);
+        add(s.adptMode == AdptMode::Automatic ? "time shift automatic" : "time shift range " + std::to_string(s.adptRange));
+        static const char* const phase[] = {"automatic", "positive", "inverted"};
+        add(std::string("phase ") + phase[std::clamp(static_cast<int>(s.krkPhase), 0, 2)]);
+        add("block " + std::to_string(s.blockSizeMs) + " ms");
+        if ((pair || wave) && s.oversample) add("oversample x" + std::to_string(s.oversampleMul));
+    }
+    if (pair) return d;
+    if (wave && !model) {
+        static const char* const level[] = {"automatic (averaged)", "automatic (adaptive)", "manual", "none"};
+        add(std::string("level ") + level[std::clamp(static_cast<int>(s.levelAdpt), 0, 3)]);
+    }
+    if (!wave && s.freqModel == 0) {
+        add(s.soundQty == SoundQty::Quality ? "accuracy quality" : "accuracy extraction");
+        add("extractable level " + std::to_string(s.extractLevel));
+    }
+    if (wave && model && s.waveModel != WaveModel::LowRank)
+        add(s.waveFft > 0 ? "frequency resolution " + std::to_string(s.waveFft) : std::string("frequency resolution automatic"));
+    if (wave && model && !hardPair && !s.fitSpans.empty()) add("vocal-free passages " + s.fitSpans);
+    if (s.matchBandwidth) add("match bandwidth");
+    if (s.matchLowEnd) add("match low end");
+    if (s.removeSubsonic) add("remove sub-bass rumble");
+    if (s.centralize) add("centralization");
+    if (s.lowPass) add("low-pass");
+    if (s.highPass) add("high-pass");
+    return d;
 }
 
 void writeInfo(stepcache::Writer& w, const AudioInfo& i) {
@@ -296,6 +347,7 @@ int32_t extractFileImpl(
 
     Settings s;
     toCpp(*settings, s);
+    cancel::reset();
     stepcache::configure(s.cacheSteps);
     stepcache::setSources(originalPath, instrumentalPath);
 
@@ -318,19 +370,17 @@ int32_t extractFileImpl(
     } else {
         log::line("output       %s", outputPath);
     }
-    log::detail("method: %s | %s | intro %d | level %d | drift %s | phase %d | block %d ms%s%s%s",
-                methodName(s), s.procMode == ProcMode::Normal ? "normal" : s.procMode == ProcMode::LRDifference ? "L-R difference" : "mono",
-                static_cast<int>(s.introMode), static_cast<int>(s.levelAdpt), s.adptMode == AdptMode::Automatic ? "auto" : "manual",
-                static_cast<int>(s.krkPhase), s.blockSizeMs, s.oversample ? (" | oversample x" + std::to_string(s.oversampleMul)).c_str() : "",
-                s.centralize ? " | centralization" : "", (s.lowPass || s.highPass) ? " | filters" : "");
+    log::detail("method: %s", describeMethod(s).c_str());
 
     AudioBuffer orig, inst;
     AudioInfo origInfo, instInfo;
     std::string err;
     {
         log::Stage st("decode original");
+        log::Bar bar;
         if (!decodeCached(originalPath, stepcache::Source::Original, orig, origInfo, err)) {
             st.fail();
+            if (cancel::requested()) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
             setError(errorBuf, errorLen, "Original: " + err);
             log::error("cannot read the original: " + err, "");
             return 2;
@@ -349,8 +399,10 @@ int32_t extractFileImpl(
         log::line("the same file is used for both inputs: post-processing only");
     } else {
         log::Stage st("decode instrumental");
+        log::Bar bar;
         if (!decodeCached(instrumentalPath, stepcache::Source::Instrumental, inst, instInfo, err)) {
             st.fail();
+            if (cancel::requested()) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
             setError(errorBuf, errorLen, "Instrumental: " + err);
             log::error("cannot read the instrumental: " + err, "");
             return 3;
@@ -371,7 +423,7 @@ int32_t extractFileImpl(
         ? extractFiltersOnly(orig, s, quantize16, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr)
         : extract(orig, inst, s, quantize16, progress ? &progressTrampoline : nullptr, progress ? &bridge : nullptr, &origInfo, &instInfo);
 
-    if (r.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
+    if (r.cancelled || cancel::requested()) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
     if (!r.error.empty()) { setError(errorBuf, errorLen, r.error); log::error(r.error, ""); return 5; }
     log::detail("alignment:%s", r.alignment.debugString().c_str());
 
@@ -382,11 +434,11 @@ int32_t extractFileImpl(
         ProgressBridge pairBridge{progress, progressUser, 0.8f, 1.0f};
         log::line("aligned pair");
         aligned = extract(orig, inst, ps, quantize16, progress ? &progressTrampoline : nullptr, progress ? &pairBridge : nullptr, &origInfo, &instInfo);
-        if (aligned.cancelled) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
+        if (aligned.cancelled || cancel::requested()) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
         if (!aligned.error.empty()) { setError(errorBuf, errorLen, aligned.error); log::error(aligned.error, ""); return 5; }
     }
 
-    if (!beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
+    if (cancel::requested() || !beforeWrite(progress, progressUser)) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
     if ((s.saveMask & kSaveMembers) && !pair && !same && std::none_of(r.extras.begin(), r.extras.end(), [](const auto& e) { return e.first != "_raw"; }))
         log::warn("no ensemble members to save: only Ensemble has them");
     EncodeOptions enc;
@@ -437,8 +489,10 @@ int32_t extractFileImpl(
     std::string written;
     for (const Target& t : targets) {
         log::Stage st("encode " + t.what + " " + extensionOf(format));
+        log::Bar bar;
         if (!encodeAudio(t.path, *t.audio, enc, err)) {
             st.fail();
+            if (cancel::requested()) { setError(errorBuf, errorLen, "cancelled"); log::warn("cancelled"); return 4; }
             setError(errorBuf, errorLen, "Output: " + err);
             log::error("cannot write " + t.path + ": " + err, "");
             return 6;
@@ -575,6 +629,10 @@ UTAGOE_API int32_t UTAGOE_CALL utagoe_check_spans(const char* text, char* errorB
 
 UTAGOE_API void UTAGOE_CALL utagoe_set_log(UtagoeLog fn, void* user) {
     log::setCallback(fn, user);
+}
+
+UTAGOE_API void UTAGOE_CALL utagoe_cancel(void) {
+    cancel::request();
 }
 
 UTAGOE_API void UTAGOE_CALL utagoe_clear_step_cache(void) {

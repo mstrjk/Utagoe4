@@ -1,7 +1,6 @@
 #include "hp.h"
+#include "cancel.h"
 #include "mathconst.h"
-#include "log.h"
-#include <chrono>
 #include "parallel.h"
 
 #include <algorithm>
@@ -67,6 +66,7 @@ std::vector<std::pair<Method, Audio>> render(const Audio& mix, const Audio& base
             const std::size_t b = std::min(a + core, len);
             const std::size_t lo = a >= context ? a - context : 0, hi = std::min(len, b + context);
             const Audio xb = slice(base, lo, hi), yb = slice(mix, lo, hi);
+            if (cancel::requested()) return;
             const Spec X = rc::stft(xb, N, hop), Y = rc::stft(yb, N, hop);
             for (std::size_t mi = 0; mi < spectral.size(); ++mi) {
                 Spec B;
@@ -74,6 +74,7 @@ std::vector<std::pair<Method, Audio>> render(const Audio& mix, const Audio& base
                 case Method::Surface: B = phaseSurface(Y, X, sr, N, hop); break;
                 default: B = lowrankField(Y, X, sr, N, hop); break;
                 }
+                if (cancel::requested()) return;
                 const Audio p = rc::istft(B, N, hop, hi - lo);
                 preds[mi][static_cast<std::size_t>(bi)] = slice(p, a - lo, b - lo);
             }
@@ -85,9 +86,9 @@ std::vector<std::pair<Method, Audio>> render(const Audio& mix, const Audio& base
         }
     };
     parallelFor(nb, 1, [&](long long b0, long long e0) {
-        for (long long bi = b0; bi < e0 && !stop; ++bi) block(bi);
+        for (long long bi = b0; bi < e0 && !stop && !cancel::requested(); ++bi) block(bi);
     });
-    if (stop) { cancelled = true; return out; }
+    if (stop || cancel::requested()) { cancelled = true; return out; }
     for (std::size_t mi = 0; mi < spectral.size(); ++mi) {
         Audio accum;
         accum.channels = mix.channels;
@@ -140,23 +141,21 @@ Audio alignDense(const Audio& mix, const Audio& instrumental, double sr, TimeMap
         if (progress && !progress(f, what)) cancelled = true;
         return !cancelled;
     };
-    if (!report(0.0, "dense side-guided time map")) return {};
-    auto T0 = std::chrono::steady_clock::now();
-    auto lap = [&](const char* w) { auto t = std::chrono::steady_clock::now(); log::detail("  TIMER %s %.3f", w, std::chrono::duration<double>(t - T0).count()); T0 = t; };
+    if (!report(0.0, "coarse time path")) return {};
     map = initialMap(mix, instrumental, sr);
-    lap("initialMap");
+    if (!report(0.2, "warping the instrumental")) return {};
     Audio aligned = warpReference(instrumental, mix.frames(), map, sr);
-    lap("warp");
     for (int k = 0; k < 2; ++k) {
-        if (!report(0.4 + 0.3 * k, "phase/time refinement " + std::to_string(k + 1) + "/2")) return {};
+        const double base = 0.26 + 0.37 * k;
+        const std::string pass = " " + std::to_string(k + 1) + "/2";
+        if (!report(base, "phase fit" + pass)) return {};
         const PhaseModel model = fitPhase(mix, aligned, sr);
-        lap("fitPhase");
+        if (!report(base + 0.08, "phase correction" + pass)) return {};
         const Audio provisional = applyPhase(aligned, sr, model);
-        lap("applyPhase");
+        if (!report(base + 0.12, "fine time anchors" + pass)) return {};
         refineMap(mix, provisional, map, sr, k == 0 ? 2.0 : 1.0);
-        lap("refineMap");
+        if (!report(base + 0.31, "warping the instrumental" + pass)) return {};
         aligned = warpReference(instrumental, mix.frames(), map, sr);
-        lap("warp");
     }
     report(1.0, "time map done");
     return aligned;

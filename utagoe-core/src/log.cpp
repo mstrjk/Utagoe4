@@ -372,6 +372,46 @@ double Stage::seconds() const {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
 }
 
+namespace {
+thread_local Bar* g_bar = nullptr;
+}
+
+Bar::Bar(int id) : id_(id), previous_(g_bar) { g_bar = this; }
+
+Bar::~Bar() {
+    g_bar = previous_;
+    clearStatus(id_);
+}
+
+void Bar::range(double from, double to) {
+    from_ = std::clamp(from, 0.0, 1.0);
+    to_ = std::clamp(to, from_, 1.0);
+}
+
+void Bar::update(double fraction, const std::string& what) {
+    std::string label;
+    double f;
+    {
+        std::lock_guard<std::mutex> g(lock_);
+        f = std::max(shown_, from_ + (to_ - from_) * std::clamp(fraction, 0.0, 1.0));
+        shown_ = f;
+        if (!what.empty()) what_ = what;
+        label = what_.empty() ? std::string() : " | " + what_;
+    }
+    status(id_, false, "  %s%s | %s elapsed | ~%s left", progressBar(f).c_str(), label.c_str(),
+           clock(eta_.elapsed()).c_str(), clock(eta_.remaining(f)).c_str());
+}
+
+void Bar::report(double fraction, const std::string& what) {
+    if (g_bar) g_bar->update(fraction, what);
+}
+
+void Bar::report(double done, double total, const std::string& what) {
+    if (g_bar && total > 0) g_bar->update(done / total, what);
+}
+
+Bar* Bar::current() { return g_bar; }
+
 double Eta::elapsed() const {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count();
 }

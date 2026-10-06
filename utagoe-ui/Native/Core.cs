@@ -315,6 +315,9 @@ internal static class Core
 {
     private const string Dll = "utagoe_core.dll";
 
+    [DllImport(Dll, EntryPoint = "utagoe_cancel")]
+    public static extern void Cancel();
+
     [DllImport(Dll, EntryPoint = "utagoe_clear_step_cache")]
     public static extern void ClearStepCache();
 

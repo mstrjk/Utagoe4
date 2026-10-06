@@ -2,6 +2,8 @@
 // float から 16-bit へ落とすときは TPDF dither を掛ける。ただし既に 16-bit の格子上にある (v3 互換経路の) 音声には掛けない。
 
 #include "codec_internal.h"
+#include "cancel.h"
+#include "log.h"
 
 #include "dr_wav.h"
 #include "FLAC/stream_encoder.h"
@@ -225,6 +227,8 @@ bool writeFlac(const std::string& path, const AudioBuffer& in, OutputDepth depth
     const std::size_t chunk = 8192;
     for (std::size_t pos = 0; pos < in.frames(); pos += chunk) {
         const std::size_t take = std::min(chunk, in.frames() - pos);
+        log::Bar::report(static_cast<double>(pos), static_cast<double>(in.frames()));
+        if (cancel::requested()) { error = "cancelled"; return false; }
         if (!FLAC__stream_encoder_process_interleaved(enc.get(), ints.data() + pos * in.channels,
                                                       static_cast<unsigned>(take))) {
             FLAC__stream_encoder_finish(enc.get());
@@ -287,6 +291,8 @@ bool writeVorbis(const std::string& path, const AudioBuffer& in, int kbps, std::
     // 最後は take = 0 で vorbis_analysis_wrote を呼び、stream を終端する。
     for (std::size_t pos = 0; ok; pos += chunk) {
         const std::size_t take = pos < frames ? std::min(chunk, frames - pos) : 0;
+        log::Bar::report(static_cast<double>(pos), static_cast<double>(frames));
+        if (cancel::requested()) { error = "cancelled"; return false; }
         if (take > 0) {
             float** buf = vorbis_analysis_buffer(&vd, static_cast<int>(take));
             for (std::size_t i = 0; i < take; ++i)
@@ -333,6 +339,8 @@ bool writeOpus(const std::string& path, const AudioBuffer& in, int kbps, std::st
     const std::size_t chunk = 4096;
     for (std::size_t pos = 0; pos < in.frames(); pos += chunk) {
         const std::size_t take = std::min(chunk, in.frames() - pos);
+        log::Bar::report(static_cast<double>(pos), static_cast<double>(in.frames()));
+        if (cancel::requested()) { error = "cancelled"; return false; }
         if (ope_encoder_write_float(enc.get(), in.samples.data() + pos * in.channels, static_cast<int>(take)) != OPE_OK) {
             error = "Opus encoding failed";
             return false;

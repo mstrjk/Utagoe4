@@ -2,6 +2,7 @@
 // STFT は平方根 Hann 窓、逆変換は窓の二乗和で正規化する。gaussian は scipy.ndimage.gaussian_filter1d と同じ係数と端の扱い。
 
 #include "rc.h"
+#include "cancel.h"
 #include "gpu.h"
 #include "mathconst.h"
 #include "parallel.h"
@@ -280,6 +281,7 @@ void fftDouble(std::vector<cd>& a, bool inverse) {
     const std::vector<cd>& table = doubleTwiddles(n, inverse);
     std::size_t offset = 0;
     for (std::size_t len = 2; len <= n; len <<= 1) {
+        if (cancel::requested()) return;
         const std::size_t halfLen = len / 2;
         const cd* tw = table.data() + offset;
         offset += halfLen;

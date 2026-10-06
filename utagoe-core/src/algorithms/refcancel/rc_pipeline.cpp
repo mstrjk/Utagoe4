@@ -2,7 +2,9 @@
 // 位置合わせの Huber 当てはめは scipy.optimize.least_squares の代わりに IRLS で解く (傾きの範囲制限つき)。
 // 相互相関の FFT 長は 2 のべき乗にしている (Python 版は 5-smooth の長さ)。どちらも線形相関として同じ値になる。
 
+#include <atomic>
 #include "rc.h"
+#include "cancel.h"
 #include "mathconst.h"
 #include "parallel.h"
 #include "log.h"
@@ -87,10 +89,13 @@ Calibration calibrate(const Audio& mix, const Audio& reference, const std::vecto
     Calibration cal;
     const std::vector<long long> centers = calibrationCenters(mix.frames(), valid, sr, cfg);
     cal.frames = static_cast<int>(centers.size());
+    log::Bar::report(0.0, "calibration: spectra");
     const Spec X = stftAt(reference, centers, cfg.nFft);
     const Spec Y = stftAt(mix, centers, cfg.nFft);
     const int F = X.F, T = X.T, C = X.C;
+    log::Bar::report(0.35, "calibration: fitting the transfer");
     cal.linear = fitTransfer(X, Y, cfg);
+    log::Bar::report(0.6, "calibration: coherence");
 
     // 診断用の位相の揃い具合 (coherence の中央値)。
     {
@@ -119,6 +124,7 @@ Calibration calibrate(const Audio& mix, const Audio& reference, const std::vecto
     }
 
     // 位相に頼らない level / EQ。複素回帰とは別に求める (位相が合わない組でも 0 に潰れないように)。
+    log::Bar::report(0.75, "calibration: level and EQ");
     {
         std::vector<float> px(X.v.size()), py(Y.v.size());
         for (std::size_t i = 0; i < X.v.size(); ++i) {
@@ -151,6 +157,7 @@ Calibration calibrate(const Audio& mix, const Audio& reference, const std::vecto
     }
 
     if (!nonlinear) return cal;
+    log::Bar::report(0.85, "calibration: saturation");
 
     // Hammerstein: 参照波形から多項式の特徴を作る (STFT の前に波形で累乗する)。
     {
@@ -399,6 +406,7 @@ std::vector<double> decimate(const std::vector<double>& x, int sr, int target) {
         return y;
     }
     parallelFor(static_cast<long long>(n), 4096, [&](long long b, long long e) {
+        if (cancel::requested()) return;
         for (long long i = b; i < e; ++i) {
             const double center = static_cast<double>(i) * ratio;
             const long long c0 = static_cast<long long>(std::floor(center));
@@ -433,8 +441,16 @@ Alignment estimateAlignment(const Audio& mix, const Audio& ref, int sr, const Co
     int cy = 0, cx = 0;
     // 粗い探索: 低い rate に落として、全 channel の組み合わせで最も相関の高いものを使う。
     std::vector<std::vector<double>> ylow, xlow;
-    for (int a = 0; a < mix.channels; ++a) ylow.push_back(decimate(channelSlice(mix, a, 0, coarseN), sr, lowSr));
-    for (int b = 0; b < ref.channels; ++b) xlow.push_back(decimate(channelSlice(ref, b, 0, coarseN), sr, lowSr));
+    const double steps = static_cast<double>(mix.channels + ref.channels);
+    for (int a = 0; a < mix.channels; ++a) {
+        log::Bar::report(0.3 * a / steps, "resampling for the coarse search");
+        ylow.push_back(decimate(channelSlice(mix, a, 0, coarseN), sr, lowSr));
+    }
+    for (int b = 0; b < ref.channels; ++b) {
+        log::Bar::report(0.3 * (mix.channels + b) / steps, "resampling for the coarse search");
+        xlow.push_back(decimate(channelSlice(ref, b, 0, coarseN), sr, lowSr));
+    }
+    log::Bar::report(0.3, "coarse search");
     std::vector<std::pair<const std::vector<double>*, const std::vector<double>*>> pairsIn;
     for (int a = 0; a < mix.channels; ++a)
         for (int b = 0; b < ref.channels; ++b) pairsIn.push_back({&ylow[static_cast<std::size_t>(a)], &xlow[static_cast<std::size_t>(b)]});
@@ -471,7 +487,9 @@ Alignment estimateAlignment(const Audio& mix, const Audio& ref, int sr, const Co
         which.push_back(i);
         anchorIn.push_back({&ys[i], &xs[i]});
     }
+    log::Bar::report(0.5, "fine search");
     const auto anchorOut = gccDelayMany(anchorIn, localLimit, 0.5, 8);
+    log::Bar::report(1.0, "fitting the drift");
     for (std::size_t j = 0; j < which.size(); ++j) {
         const std::size_t i = which[j];
         const long long sy = centers[i] - half;
@@ -615,7 +633,7 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
     Result res;
     const std::size_t len = mix.frames();
     res.estimate = mix;
-    auto report = [&](double f) { return !progress || progress(f); };
+    auto report = [&](double f) { return !cancel::requested() && (!progress || progress(f)); };
 
     if (len <= static_cast<std::size_t>(cfg.nFft) * 2) {
         res.error = "the audio must be longer than two analysis windows";
@@ -624,8 +642,13 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
     if (rmsOf(refIn) < 1e-12 || rmsOf(mix) < 1e-12) return res;   // 片方が無音なら原曲をそのまま返す
 
     Audio reference;
+    log::Bar bar;
     if (cfg.alignment != 0) {
+        bar.range(0.0, 0.15);
         res.alignment = estimateAlignment(mix, refIn, sr, cfg);
+        bar.range(0.0, 1.0);
+        bar.update(0.15, "lining the instrumental up");
+        if (cancel::requested()) return res;
         if (res.alignment.score < cfg.minAlignmentScore) {
             char buf[200];
             std::snprintf(buf, sizeof buf, "the alignment confidence %.3f is below %.3f; the instrumental may not match this original",
@@ -643,19 +666,17 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
     if (!report(0.1)) return res;
 
     const bool needNl = method == Method::Hammerstein || method == Method::Ensemble;
+    bar.range(cfg.alignment != 0 ? 0.2 : 0.0, 0.3);
+    if (cancel::requested()) return res;
     res.calibration = calibrate(mix, reference, valid, sr, cfg, needNl);
+    bar.range(0.0, 1.0);
+    if (cancel::requested()) return res;
     const Calibration& cal = res.calibration;
     log::detail("  calibration: %d windows%s, coherence %.3f%s", cal.frames, cfg.fitSpans.empty() ? "" : " (vocal-free passages only)",
                 cal.medianCoherence,
                 cal.hasNonlinear ? (std::string(", nonlinear ") + (cal.nonlinearAccepted ? "accepted" : "rejected") +
                                     (cal.cvImprovement.size() == 2 ? " (held-out gain " + std::to_string(cal.cvImprovement[0] * 100).substr(0, 5) +
                                      "% / " + std::to_string(cal.cvImprovement[1] * 100).substr(0, 5) + "%)" : "")).c_str() : "");
-    log::Eta eta;
-    int block = 0;
-    const long long totalBlocks = static_cast<long long>((len + std::max<std::size_t>(1, static_cast<std::size_t>(
-        std::max<std::size_t>(static_cast<std::size_t>(cfg.nFft) * 4, static_cast<std::size_t>(cfg.blockSeconds * sr)) * 0.75)) - 1) /
-        std::max<std::size_t>(1, static_cast<std::size_t>(std::max<std::size_t>(static_cast<std::size_t>(cfg.nFft) * 4,
-                                                                             static_cast<std::size_t>(cfg.blockSeconds * sr)) * 0.75)));
     if (!report(0.3)) return res;
 
     const int C = mix.channels;
@@ -737,12 +758,21 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
     std::vector<std::size_t> starts;
     for (std::size_t a = 0; a < len; a += step) starts.push_back(a);
     const std::size_t wave = static_cast<std::size_t>(std::max(1, workerCount()));
+    std::atomic<std::size_t> computed{0};
+    bar.range(0.3, 1.0);
     for (std::size_t first = 0; first < starts.size(); first += wave) {
       const std::size_t count = std::min(wave, starts.size() - first);
       std::vector<BlockOut> outs(count);
       parallelFor(static_cast<long long>(count), 1, [&](long long b0, long long e0) {
-          for (long long i = b0; i < e0; ++i) compute(starts[first + static_cast<std::size_t>(i)], outs[static_cast<std::size_t>(i)]);
+          for (long long i = b0; i < e0; ++i) {
+              if (cancel::requested()) return;
+              compute(starts[first + static_cast<std::size_t>(i)], outs[static_cast<std::size_t>(i)]);
+              const std::size_t finished = ++computed;
+              bar.update(static_cast<double>(finished) / static_cast<double>(starts.size()),
+                         "block " + std::to_string(finished) + "/" + std::to_string(starts.size()));
+          }
       });
+      if (!report(0.3)) return res;
       for (std::size_t bi = 0; bi < count; ++bi) {
         const std::size_t a = starts[first + bi];
         const std::size_t b = std::min(a + core, len);
@@ -772,10 +802,7 @@ Result separate(const Audio& mix, const Audio& refIn, std::vector<char> valid, i
             add(o.members[m].second, memberAcc[m], false);
         }
         // Python 版と同じく、開始位置は最後まで刻む (末尾の短い block も重ねて足す)。
-        ++block;
         const double frac = static_cast<double>(b) / len;
-        log::status(1, false, "  %s | block %d/%lld | %s elapsed | ~%s left", log::progressBar(frac).c_str(), block, totalBlocks,
-                    log::clock(eta.elapsed()).c_str(), log::clock(eta.remaining(frac)).c_str());
         if (!report(0.3 + 0.7 * frac)) return res;
       }
     }

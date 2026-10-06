@@ -3,6 +3,7 @@
 // 内部は int16 scale (full scale = 32768)。
 
 #include "utagoe.h"
+#include "cancel.h"
 #include "algorithms/v3/engine.h"
 #include "gpu.h"
 #include "algorithms/refcancel/rc.h"
@@ -34,8 +35,11 @@ struct Stage {
     void* user;
     float from, to;
     bool logged = false;
+    log::Bar* bar = log::Bar::current();
     bool report(float f) const {
-        if (logged) log::status(3, false, "%s", log::progressBar(f).c_str());
+        if (logged && bar) bar->update(f);
+        else if (logged) log::status(3, false, "%s", log::progressBar(f).c_str());
+        if (cancel::requested()) return false;
         return !fn || fn(from + (to - from) * f, user);
     }
 };
@@ -220,8 +224,11 @@ bool isAlgorithm(WaveModel m) {
 }
 
 hp::Progress hpProgress(ProgressFn fn, void* user, float from, float to, bool& cancelled) {
-    return [fn, user, from, to, &cancelled](double f, const std::string& what) {
-        log::status(1, false, "  %s | %s", log::progressBar(f).c_str(), what.c_str());
+    log::Bar* bar = log::Bar::current();
+    return [fn, user, from, to, &cancelled, bar](double f, const std::string& what) {
+        if (bar) bar->update(f, what);
+        else log::status(1, false, "  %s | %s", log::progressBar(f).c_str(), what.c_str());
+        if (cancel::requested()) cancelled = true;
         if (fn && !fn(from + (to - from) * static_cast<float>(f), user)) cancelled = true;
         return !cancelled;
     };
@@ -236,7 +243,12 @@ struct GccAligned {
 
 bool gccAlign(const rc::Audio& mix, const rc::Audio& ref, int rate, std::size_t frames, GccAligned& g, std::string& error) {
     rc::Config cfg;
+    if (log::Bar* bar = log::Bar::current()) bar->range(0.0, 0.85);
     g.a = rc::estimateAlignment(mix, ref, rate, cfg);
+    if (log::Bar* bar = log::Bar::current()) {
+        bar->range(0.0, 1.0);
+        bar->update(0.85, "lining the instrumental up");
+    }
     if (g.a.score < cfg.minAlignmentScore) {
         char buf[200];
         std::snprintf(buf, sizeof buf, "the alignment confidence %.3f is below %.3f; the instrumental may not match this original",
@@ -292,6 +304,7 @@ AudioBuffer readBuffer(stepcache::Reader& r) {
 void reused() { log::detail("  reused from the step cache"); }
 
 GccRun runGcc(const rc::Audio& mix, const rc::Audio& ref, int rate, std::size_t frames) {
+    log::Bar bar;
     std::string k;
     GccRun r;
     if (stepcache::enabled()) {
@@ -342,6 +355,7 @@ struct XcorrRun {
 };
 
 XcorrRun runXcorr(const rc::Audio& mix, const rc::Audio& ref, int rate, const rc::Config& cfg) {
+    log::Bar bar;
     const std::string k = stepcache::key("xcorr", {stepcache::hash(mix.v), stepcache::hash(ref.v), u(mix.channels), u(rate),
                                                    u(static_cast<long long>(mix.frames()))});
     XcorrRun r;
@@ -361,7 +375,10 @@ XcorrRun runXcorr(const rc::Audio& mix, const rc::Audio& ref, int rate, const rc
         }
         r = XcorrRun{};
     }
+    bar.range(0.0, 0.85);
     r.a = rc::estimateAlignment(mix, ref, rate, cfg);
+    bar.range(0.0, 1.0);
+    bar.update(0.85, "lining the instrumental up");
     if (r.a.score >= cfg.minAlignmentScore) r.warped = rc::warpReference(ref, mix.frames(), r.a, cfg.sincTaps, r.valid);
     stepcache::Writer out;
     out.i64(r.a.mode);
@@ -575,6 +592,7 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
     } else if (align == WaveAlign::Dense) {
         ref.v = inst.samples;
         log::Stage st("dense time map");
+        log::Bar bar;
         const float to = from + (1.0f - from) * 0.3f;
         bool cancelled = false;
         hp::TimeMap map;
@@ -585,6 +603,10 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
         } catch (const std::exception& e) {
             log::clearStatus(1);
             st.fail();
+            if (cancel::requested()) {
+                res.cancelled = true;
+                return res;
+            }
             log::error(std::string("dense time map: ") + e.what(), log::lastThrowTrace());
             res.error = std::string("dense time map: ") + e.what();
             return res;
@@ -608,6 +630,7 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
     char buf[400];
     bool cancelled = false;
     log::Stage modelStage(name + " algorithm" + alignSuffix(align));
+    log::Bar modelBar;
     if (algorithm) {
         const hp::Method method = model == WaveModel::Surface ? hp::Method::Surface : hp::Method::LowRank;
         hp::Result r;
@@ -616,6 +639,10 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
         } catch (const std::exception& e) {
             log::clearStatus(1);
             modelStage.fail();
+            if (cancel::requested()) {
+                res.cancelled = true;
+                return res;
+            }
             log::error(name + ": " + e.what(), log::lastThrowTrace());
             res.error = name + ": " + e.what();
             return res;
@@ -644,7 +671,11 @@ ExtractResult extractModel(const AudioBuffer& orig, const AudioBuffer& inst, con
             });
         } catch (const std::exception& e) {
             r.error = e.what();
-            log::error(name + ": " + e.what(), log::lastThrowTrace());
+            if (!cancel::requested()) log::error(name + ": " + e.what(), log::lastThrowTrace());
+        }
+        if (cancel::requested()) {
+            res.cancelled = true;
+            return res;
         }
         if (cancelled) {
             res.cancelled = true;
@@ -746,6 +777,7 @@ ExtractResult extractAlignedPair(const AudioBuffer& orig, const AudioBuffer& ins
         res.alignment.model = buf;
     } else if (settings.waveAlign == WaveAlign::Dense) {
         log::Stage st("dense time map");
+        log::Bar bar;
         if (ch != 2) {
             st.fail();
             res.error = "the dense time map needs a stereo original and instrumental";
@@ -765,6 +797,10 @@ ExtractResult extractAlignedPair(const AudioBuffer& orig, const AudioBuffer& ins
         } catch (const std::exception& e) {
             log::clearStatus(1);
             st.fail();
+            if (cancel::requested()) {
+                res.cancelled = true;
+                return res;
+            }
             log::error(std::string("dense time map: ") + e.what(), log::lastThrowTrace());
             res.error = std::string("dense time map: ") + e.what();
             return res;
@@ -837,7 +873,11 @@ namespace {
 
 bw::Worse matchBandwidth(const AudioBuffer& orig, const AudioBuffer& inst, const AudioInfo* oi, const AudioInfo* ii, AudioBuffer& modified) {
     const double sr = orig.sampleRate;
-    const bw::Profile po = bw::analyse(orig.samples, orig.channels, sr), pi = bw::analyse(inst.samples, inst.channels, sr);
+    log::Bar::report(0.0, "reading the original's spectrum");
+    const bw::Profile po = bw::analyse(orig.samples, orig.channels, sr);
+    log::Bar::report(0.4, "reading the instrumental's spectrum");
+    const bw::Profile pi = bw::analyse(inst.samples, inst.channels, sr);
+    log::Bar::report(0.8, "comparing");
     bw::Source so, si;
     if (oi) { so.lossy = !oi->lossless && oi->bitrateKbps <= 1000; so.kbps = oi->bitrateKbps; }
     if (ii) { si.lossy = !ii->lossless && ii->bitrateKbps <= 1000; si.kbps = ii->bitrateKbps; }
@@ -877,6 +917,7 @@ bw::Worse matchBandwidth(const AudioBuffer& orig, const AudioBuffer& inst, const
     }
     modified = origWorse ? inst : orig;
     const std::vector<double> curve = bw::curveFor(worse, better, r.worse, lag);
+    log::Bar::report(0.85, "following the cutoff");
     const double removed = bw::lowpassToCurve(modified.samples, modified.channels, sr, curve, better.nFft, better.hop);
     if (removed <= -299) {
         log::detail("  the %s's cutoff sits at the top of the band; the %s was left unchanged", worseName, betterName);
@@ -927,6 +968,7 @@ ExtractResult extract(const AudioBuffer& original,
         std::snprintf(what, sizeof what, "convert instrumental %d Hz %d ch -> %d Hz %d ch",
                       instrumentalIn.sampleRate, instrumentalIn.channels, rate, ch);
         log::Stage ls(what);
+        log::Bar bar;
         Stage st{progress, progressUser, 0.0f, 0.10f, true};
         std::string k;
         bool hit = false;
@@ -959,6 +1001,7 @@ ExtractResult extract(const AudioBuffer& original,
     const AudioBuffer* origPtr = &orig;
     if (settings.matchBandwidth && settings.outputKind == OutputKind::Vocal) {
         log::Stage ls("match lowest bandwidth");
+        log::Bar bar;
         std::string k;
         bool hit = false;
         bw::Worse w = bw::Worse::None;
@@ -999,6 +1042,7 @@ ExtractResult extract(const AudioBuffer& original,
             log::warn("  the dense time map needs a stereo original and instrumental; using Utagoe v3 analysis");
         } else {
             log::Stage ls(dense ? "dense time map" : "cross-correlation alignment");
+            log::Bar bar;
             rc::Audio mixA, refA;
             mixA.channels = refA.channels = ch;
             mixA.v = src.samples;
@@ -1009,7 +1053,7 @@ ExtractResult extract(const AudioBuffer& original,
                 try {
                     refA = runDense(mixA, refA, rate, hpProgress(progress, progressUser, 0.0f, 0.1f, cancelled), cancelled).warped;
                 } catch (const std::exception& e) {
-                    log::warn("  dense time map failed (%s); using Utagoe v3 analysis", e.what());
+                    if (!cancel::requested()) log::warn("  dense time map failed (%s); using Utagoe v3 analysis", e.what());
                     ok = false;
                 }
                 log::clearStatus(1);
@@ -1043,6 +1087,7 @@ ExtractResult extract(const AudioBuffer& original,
     const bool cutSubsonic = settings.removeSubsonic && settings.outputKind == OutputKind::Vocal;
     if (settings.matchLowEnd && settings.outputKind == OutputKind::Vocal) {
         log::Stage ls("match low end");
+        log::Bar bar;
         lowMatched.sampleRate = instPtr->sampleRate;
         lowMatched.channels = instPtr->channels;
         const float lowFrom = conform ? 0.10f : 0.0f;

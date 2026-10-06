@@ -3,6 +3,8 @@
 // 同梱側で失敗した場合も Media Foundation で再試行する。
 
 #include "codec_internal.h"
+#include "cancel.h"
+#include "log.h"
 
 #include "dr_wav.h"
 #include "dr_mp3.h"
@@ -97,7 +99,16 @@ bool decodeWave(const std::string& path, AudioBuffer* out, AudioInfo& info, std:
     out->sampleRate = info.sampleRate;
     out->channels = info.channels;
     out->samples.resize(static_cast<std::size_t>(wav.totalPCMFrameCount) * wav.channels);
-    const drwav_uint64 got = drwav_read_pcm_frames_f32(&wav, wav.totalPCMFrameCount, out->samples.data());
+    drwav_uint64 got = 0;
+    const drwav_uint64 step = 1 << 18;
+    while (got < wav.totalPCMFrameCount) {
+        const drwav_uint64 want = std::min<drwav_uint64>(step, wav.totalPCMFrameCount - got);
+        const drwav_uint64 n = drwav_read_pcm_frames_f32(&wav, want, out->samples.data() + got * wav.channels);
+        got += n;
+        log::Bar::report(static_cast<double>(got), static_cast<double>(wav.totalPCMFrameCount));
+        if (cancel::requested()) { error = "cancelled"; return false; }
+        if (n < want) break;
+    }
     out->samples.resize(static_cast<std::size_t>(got) * wav.channels);
     return true;
 }
@@ -125,6 +136,11 @@ FLAC__StreamDecoderWriteStatus flacWrite(const FLAC__StreamDecoder*, const FLAC_
     for (unsigned i = 0; i < frame->header.blocksize; ++i)
         for (unsigned c = 0; c < ch; ++c)
             s[base + static_cast<std::size_t>(i) * ch + c] = static_cast<float>(buffer[c][i]) * scale;
+    log::Bar::report(static_cast<double>(s.size() / ch), static_cast<double>(st->info->frames));
+    if (cancel::requested()) {
+        st->failed = true;
+        return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
+    }
     return FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
 }
 
@@ -211,6 +227,8 @@ bool decodeMp3(const std::string& path, AudioBuffer* out, AudioInfo& info, std::
         const drmp3_uint64 got = drmp3_read_pcm_frames_f32(&mp3, chunk, buf);
         if (got == 0) break;
         out->samples.insert(out->samples.end(), buf, buf + got * mp3.channels);
+        log::Bar::report(static_cast<double>(out->samples.size() / mp3.channels), static_cast<double>(info.frames));
+        if (cancel::requested()) { error = "cancelled"; return false; }
     }
     return true;
 }
@@ -256,6 +274,8 @@ bool decodeVorbis(const std::string& path, AudioBuffer* out, AudioInfo& info, st
         if (ov_info(&vf, section)->channels != info.channels) break;   // chain 途中の形式変更は打ち切る
         for (long i = 0; i < got; ++i)
             for (int c = 0; c < info.channels; ++c) out->samples.push_back(pcm[c][i]);
+        log::Bar::report(static_cast<double>(out->samples.size() / info.channels), static_cast<double>(info.frames));
+        if (cancel::requested()) { error = "cancelled"; return false; }
     }
     return true;
 }
@@ -289,6 +309,8 @@ bool decodeOpus(const std::string& path, AudioBuffer* out, AudioInfo& info, std:
         if (got == 0) break;
         if (op_channel_count(of.get(), link) != info.channels) break;
         out->samples.insert(out->samples.end(), buf.begin(), buf.begin() + got * info.channels);
+        log::Bar::report(static_cast<double>(out->samples.size() / info.channels), static_cast<double>(info.frames));
+        if (cancel::requested()) { error = "cancelled"; return false; }
     }
     return true;
 }

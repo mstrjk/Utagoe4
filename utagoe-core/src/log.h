@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <mutex>
 #include <string>
 
 namespace utagoe {
@@ -53,6 +54,26 @@ public:
     double remaining(double fraction) const;
 private:
     std::chrono::steady_clock::time_point start_;
+};
+
+class Bar {
+public:
+    explicit Bar(int id = 1);
+    ~Bar();
+    Bar(const Bar&) = delete;
+    Bar& operator=(const Bar&) = delete;
+    void update(double fraction, const std::string& what = "");
+    void range(double from, double to);
+    static void report(double fraction, const std::string& what = "");
+    static void report(double done, double total, const std::string& what = "");
+    static Bar* current();
+private:
+    int id_;
+    Bar* previous_;
+    Eta eta_;
+    double from_ = 0.0, to_ = 1.0, shown_ = 0.0;
+    std::string what_;
+    std::mutex lock_;
 };
 
 // 今の位置の stack trace (skip 個の frame を飛ばす)。関数名は各 module の COFF symbol から引く。

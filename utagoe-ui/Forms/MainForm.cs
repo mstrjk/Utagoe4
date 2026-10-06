@@ -608,6 +608,8 @@ internal sealed partial class MainForm : UiWindow
 
     private void HaltNow()
     {
+        try { Core.Cancel(); }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { }
         _cancel?.Cancel();
         _stopNow?.TrySetResult();
     }

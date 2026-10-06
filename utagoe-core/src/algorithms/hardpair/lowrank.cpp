@@ -1,4 +1,5 @@
 #include "hp_grid.h"
+#include "cancel.h"
 #include "parallel.h"
 
 #include <algorithm>
@@ -18,6 +19,7 @@ void robustLowrank(std::vector<cd>& D, const std::vector<double>& W, int m, int 
     std::vector<double> weight(W.size());
     for (std::size_t i = 0; i < W.size(); ++i) weight[i] = W[i] * W[i];
     for (int it = 0; it < 24; ++it) {
+        if (cancel::requested()) return;
         std::vector<cd> grad(D.size());
         for (std::size_t i = 0; i < D.size(); ++i) {
             grad[i] = weight[i] * (L[i] + S[i] - D[i]);

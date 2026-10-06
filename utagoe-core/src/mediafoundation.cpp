@@ -3,6 +3,8 @@
 // Windows N / KN edition は Media Feature Pack がないと MF 自体が使えないので、その場合は分かるエラーを返す。
 
 #include "codec_internal.h"
+#include "cancel.h"
+#include "log.h"
 
 #ifdef _WIN32
 
@@ -204,6 +206,7 @@ bool mfDecode(const std::string& path, AudioBuffer* out, AudioInfo& info, std::s
     if (info.frames > 0) out->samples.reserve(static_cast<std::size_t>(info.frames) * ch);
 
     for (;;) {
+        if (cancel::requested()) { error = "cancelled"; return false; }
         DWORD flags = 0;
         ComPtr<IMFSample> sample;
         h = reader->ReadSample(stream, 0, nullptr, &flags, nullptr, &sample);
@@ -219,6 +222,7 @@ bool mfDecode(const std::string& path, AudioBuffer* out, AudioInfo& info, std::s
             const float* f = reinterpret_cast<const float*>(data);
             out->samples.insert(out->samples.end(), f, f + len / sizeof(float));
             buf->Unlock();
+            log::Bar::report(static_cast<double>(out->samples.size() / ch), static_cast<double>(info.frames));
         }
     }
     return true;
@@ -411,6 +415,8 @@ bool mfEncode(const std::string& path, const AudioBuffer& inAudio, OutputFormat 
         sample->SetSampleDuration(static_cast<LONGLONG>(take * 10000000ULL / rate));
         h = writer->WriteSample(streamIndex, sample.get());
         if (FAILED(h)) { error = hr("encoding failed", h); return false; }
+        log::Bar::report(static_cast<double>(pos + take), static_cast<double>(frames));
+        if (cancel::requested()) { error = "cancelled"; return false; }
     }
 
     h = writer->Finalize();

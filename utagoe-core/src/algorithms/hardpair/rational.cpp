@@ -59,12 +59,14 @@ PhaseSpectra phaseSpectra(const Audio& mix, const Audio& ref, double sr, int nFf
             }
         }
     });
-    for (std::size_t i = 0; i < starts.size(); ++i)
-        for (int k = 0; k < half; ++k) {
-            s.h[static_cast<std::size_t>(k)] += xyPart[i][static_cast<std::size_t>(k)];
-            s.xx[static_cast<std::size_t>(k)] += xxPart[i][static_cast<std::size_t>(k)];
-            yy[static_cast<std::size_t>(k)] += yyPart[i][static_cast<std::size_t>(k)];
-        }
+    parallelFor(half, 1024, [&](long long b, long long e) {
+        for (long long k = b; k < e; ++k)
+            for (std::size_t i = 0; i < starts.size(); ++i) {
+                s.h[static_cast<std::size_t>(k)] += xyPart[i][static_cast<std::size_t>(k)];
+                s.xx[static_cast<std::size_t>(k)] += xxPart[i][static_cast<std::size_t>(k)];
+                yy[static_cast<std::size_t>(k)] += yyPart[i][static_cast<std::size_t>(k)];
+            }
+    });
     const double maxXX = *std::max_element(s.xx.begin(), s.xx.end());
     const double reg = std::max(maxXX * 1e-10, 1e-20);
     s.f.resize(static_cast<std::size_t>(half));

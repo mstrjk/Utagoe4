@@ -1,4 +1,5 @@
 #include "hp.h"
+#include "cancel.h"
 #include "mathconst.h"
 #include "gpu.h"
 #include "parallel.h"
@@ -213,7 +214,13 @@ TimeMap initialMap(const Audio& mix, const Audio& ref, double sr) {
         throw Error("the stereo side channel is effectively silent, so a vocal-safe time map cannot be estimated. These algorithms need stereo material");
     const int factor = std::max(1, static_cast<int>(sr / 11025));
     const double rate = sr / factor;
-    const std::vector<double> yl = resampleDown(ys, factor), xl = resampleDown(xs, factor);
+    std::vector<double> yl, xl;
+    parallelFor(2, 1, [&](long long b0, long long e0) {
+        for (long long i = b0; i < e0 && !cancel::requested(); ++i) {
+            if (i == 0) yl = resampleDown(ys, factor);
+            else xl = resampleDown(xs, factor);
+        }
+    });
     const double duration = static_cast<double>(std::min(mix.frames(), ref.frames())) / sr;
     if (duration < 3) throw Error("automatic time mapping needs at least 3 seconds of audio");
     const int win = static_cast<int>(0.8 * rate);
@@ -226,7 +233,7 @@ TimeMap initialMap(const Audio& mix, const Audio& ref, double sr) {
     const std::size_t nc = coarseTimes.size();
     std::vector<double> cSec(nc), cDelay(nc), cCorr(nc);
     parallelFor(static_cast<long long>(nc), 1, [&](long long b0, long long e0) {
-        for (long long i = b0; i < e0; ++i) {
+        for (long long i = b0; i < e0 && !cancel::requested(); ++i) {
             const double sec = coarseTimes[static_cast<std::size_t>(i)];
             const long long a = static_cast<long long>(sec * rate) - win / 2;
             const long long b = std::max<long long>(0, a - search);
@@ -261,14 +268,20 @@ TimeMap initialMap(const Audio& mix, const Audio& ref, double sr) {
     }
     if (ct.size() < 4) throw Error("no trustworthy near-identity time path between the two files (are they the same recording?)");
     const Sos sos = butterBandpass(3, 200.0, std::min(9000.0, sr * 0.43), sr);
-    const std::vector<double> xf = sosfiltfilt(sos, xs), yf = sosfiltfilt(sos, ys);
+    std::vector<double> xf, yf;
+    parallelFor(2, 1, [&](long long b0, long long e0) {
+        for (long long i = b0; i < e0 && !cancel::requested(); ++i) {
+            if (i == 0) xf = sosfiltfilt(sos, xs);
+            else yf = sosfiltfilt(sos, ys);
+        }
+    });
     const int dwin = static_cast<int>(0.12 * sr);
     const int pad = std::max(16, static_cast<int>(0.002 * sr));
     const double step = std::min(0.5, (duration - 0.6) / 10);
     const std::vector<double> secs = arange(0.3, duration - 0.3, step);
     std::vector<Anchor> recs(secs.size());
     parallelFor(static_cast<long long>(secs.size()), 4, [&](long long b0, long long e0) {
-        for (long long i = b0; i < e0; ++i) {
+        for (long long i = b0; i < e0 && !cancel::requested(); ++i) {
             const double sec = secs[static_cast<std::size_t>(i)];
             const long long a = static_cast<long long>(sec * sr) - dwin / 2;
             const double guess = interp(sec, ct, cdl);
@@ -363,7 +376,7 @@ Audio warpReference(const Audio& ref, std::size_t length, const TimeMap& map, do
     const long long nx = static_cast<long long>(ref.frames());
     const int C = ref.channels;
     parallelFor(static_cast<long long>(length), 4096, [&](long long b0, long long e0) {
-        for (long long i = b0; i < e0; ++i) {
+        for (long long i = b0; i < e0 && !cancel::requested(); ++i) {
             const double p = map.positionAt(static_cast<double>(i), sr);
             if (p < 0 || p > static_cast<double>(nx - 1)) continue;
             const long long b = static_cast<long long>(std::floor(p));
@@ -392,7 +405,7 @@ void refineMap(const Audio& mix, const Audio& warped, TimeMap& map, double sr, d
     const Sos sos = butterBandpass(3, 1500.0, std::min(14000.0, sr * 0.43), sr);
     std::vector<double> ys, xs;
     parallelFor(2, 1, [&](long long b0, long long e0) {
-        for (long long i = b0; i < e0; ++i) {
+        for (long long i = b0; i < e0 && !cancel::requested(); ++i) {
             if (i == 0) ys = sosfiltfilt(sos, side(mix));
             else xs = sosfiltfilt(sos, side(warped));
         }
@@ -412,7 +425,7 @@ void refineMap(const Audio& mix, const Audio& warped, TimeMap& map, double sr, d
         std::vector<AnchorInput> inputs(secs.size());
         std::vector<char> valid(secs.size(), 0);
         parallelFor(static_cast<long long>(secs.size()), 8, [&](long long b0, long long e0) {
-            for (long long i = b0; i < e0; ++i) {
+            for (long long i = b0; i < e0 && !cancel::requested(); ++i) {
                 const long long a = static_cast<long long>(secs[static_cast<std::size_t>(i)] * sr) - win / 2;
                 if (a < 0 || a + win > static_cast<long long>(ys.size())) continue;
                 inputs[static_cast<std::size_t>(i)] = prepareAnchor(ys.data() + a, xs.data() + a, win, w);
@@ -442,6 +455,7 @@ void refineMap(const Audio& mix, const Audio& warped, TimeMap& map, double sr, d
         setup.twInverse = rc::fftTwiddles(plan->m, true).data();
         setup.lagTwiddle = twiddle.data();
         std::vector<double> acc, c0;
+        if (cancel::requested()) return;
         if (live.empty() || gpu::anchorScan(setup, yp, xp, acc, c0)) {
             for (std::size_t i = 0; i < secs.size(); ++i) {
                 recs[i].sec = secs[i];
@@ -457,9 +471,10 @@ void refineMap(const Audio& mix, const Audio& warped, TimeMap& map, double sr, d
             done = true;
         }
     }
+    if (cancel::requested()) return;
     if (!done)
     parallelFor(static_cast<long long>(secs.size()), 2, [&](long long b0, long long e0) {
-        for (long long i = b0; i < e0; ++i) {
+        for (long long i = b0; i < e0 && !cancel::requested(); ++i) {
             const double sec = secs[static_cast<std::size_t>(i)];
             const long long a = static_cast<long long>(sec * sr) - win / 2;
             auto& r = recs[static_cast<std::size_t>(i)];
@@ -471,6 +486,7 @@ void refineMap(const Audio& mix, const Audio& warped, TimeMap& map, double sr, d
             r.used = true;
         }
     });
+    if (cancel::requested()) return;
     std::vector<double> t, d, q;
     map.anchors.emplace_back();
     for (const auto& r : recs)

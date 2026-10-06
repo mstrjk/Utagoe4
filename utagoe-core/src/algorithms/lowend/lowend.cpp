@@ -1,3 +1,6 @@
+#include <atomic>
+#include "log.h"
+#include "cancel.h"
 #include "lowend.h"
 #include "mathconst.h"
 #include "../refcancel/rc.h"
@@ -34,10 +37,9 @@ std::vector<double> crossCorrelate(const std::vector<double>& a, const std::vect
     std::vector<cd> fa(n, 0.0), fb(n, 0.0);
     for (std::size_t i = 0; i < a.size() && i < n; ++i) fa[i] = a[i];
     for (std::size_t i = 0; i < b.size() && i < n; ++i) fb[i] = b[i];
-    rc::fftDouble(fa, false);
-    rc::fftDouble(fb, false);
+    rc::fftDoubleMany({&fa, &fb}, false);
     for (std::size_t i = 0; i < n; ++i) fa[i] = std::conj(fa[i]) * fb[i];
-    rc::fftDouble(fa, true);
+    rc::fftDoubleMany({&fa}, true);
     std::vector<double> c(n);
     for (std::size_t i = 0; i < n; ++i) c[i] = fa[i].real();
     return c;
@@ -86,9 +88,11 @@ std::vector<float> filterInterleaved(const std::vector<float>& x, int channels, 
         const bool two = c1 != c0;
         std::vector<double> acc0(n + L, 0.0), acc1(two ? n + L : 0, 0.0);
         for (std::size_t first = 0; first < blocks; first += bufs.size()) {
+            if (cancel::requested()) return y;
             const std::size_t count = std::min(bufs.size(), blocks - first);
             parallelFor(static_cast<long long>(count), 1, [&](long long b, long long e) {
                 for (long long w = b; w < e; ++w) {
+                    if (cancel::requested()) return;
                     std::vector<cd>& buf = bufs[static_cast<std::size_t>(w)];
                     const std::size_t s = (first + static_cast<std::size_t>(w)) * B;
                     std::fill(buf.begin(), buf.end(), cd(0, 0));
@@ -190,7 +194,7 @@ Report match(const std::vector<float>& mixIn, const std::vector<float>& instIn, 
     Report rep;
     out.clear();
     auto tick = [&](double f) {
-        if (progress && !progress(f)) {
+        if (cancel::requested() || (progress && !progress(f))) {
             rep.cancelled = true;
             rep.reason = "cancelled";
             return false;
@@ -204,7 +208,9 @@ Report match(const std::vector<float>& mixIn, const std::vector<float>& instIn, 
         rep.reason = "too short";
         return rep;
     }
+    if (!tick(0.0)) return rep;
     const std::vector<double> mm = monoOf(mixIn, channels), im = monoOf(instIn, channels);
+    if (!tick(0.01)) return rep;
     const long long L0 = coarseLag(mm, im, sr);
     if (!tick(0.05)) return rep;
 
@@ -251,6 +257,7 @@ Report match(const std::vector<float>& mixIn, const std::vector<float>& instIn, 
         out.lagFrac = out.lag - static_cast<double>(lagInt);
         std::vector<cd> fm(static_cast<std::size_t>(N)), fi(static_cast<std::size_t>(N));
         for (std::size_t j0 = s; j0 + static_cast<std::size_t>(N) <= s + seg; j0 += static_cast<std::size_t>(N / 2)) {
+            if (cancel::requested()) return;
             const long long i0 = static_cast<long long>(j0) - lagInt;
             if (i0 < 0 || static_cast<std::size_t>(i0) + static_cast<std::size_t>(N) > ni) continue;
             for (int ch = 0; ch < channels; ++ch) {
@@ -266,12 +273,18 @@ Report match(const std::vector<float>& mixIn, const std::vector<float>& instIn, 
         }
     };
     const std::size_t wave = static_cast<std::size_t>(std::max(1, workerCount())) * 4;
+    log::Bar* bar = log::Bar::current();
+    std::atomic<std::size_t> measured{0};
     for (std::size_t first = 0; first < starts.size(); first += wave) {
         if (!tick(0.05 + 0.5 * static_cast<double>(starts[first]) / static_cast<double>(nm))) return rep;
         const std::size_t count = std::min(wave, starts.size() - first);
         std::vector<Segment> segs(count);
         parallelFor(static_cast<long long>(count), 1, [&](long long b, long long e) {
-            for (long long i = b; i < e; ++i) measure(starts[first + static_cast<std::size_t>(i)], segs[static_cast<std::size_t>(i)]);
+            for (long long i = b; i < e; ++i) {
+                if (cancel::requested()) return;
+                measure(starts[first + static_cast<std::size_t>(i)], segs[static_cast<std::size_t>(i)]);
+                if (bar) bar->update(0.05 + 0.5 * static_cast<double>(++measured) / static_cast<double>(starts.size()), "matching segments");
+            }
         });
         for (std::size_t i = 0; i < count; ++i) {
             const Segment& g = segs[i];
@@ -292,6 +305,7 @@ Report match(const std::vector<float>& mixIn, const std::vector<float>& instIn, 
             }
         }
     }
+    if (!tick(0.56)) return rep;
     if (rep.segments < 4) {
         rep.reason = "the pair could not be lined up reliably";
         return rep;
@@ -482,6 +496,10 @@ Report match(const std::vector<float>& mixIn, const std::vector<float>& instIn, 
             rep.ride5Db = rides[rides.size() / 20];
             rep.ride95Db = rides[rides.size() * 19 / 20];
             const std::vector<float> lowPart = filterInterleaved(out, channels, lowH, N);
+            if (!tick(0.95)) {
+                out.clear();
+                return rep;
+            }
             for (std::size_t i = 0; i < ni; ++i) {
                 const double g = den[i] > 1e-6 ? num[i] / den[i] : 1.0;
                 for (int c = 0; c < channels; ++c) {

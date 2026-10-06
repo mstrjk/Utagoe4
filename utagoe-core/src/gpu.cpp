@@ -4,6 +4,7 @@
 // ソフトウェア描画 (WARP / Microsoft Basic Render Driver) は CPU と変わらないので使わない。
 
 #include "gpu.h"
+#include "cancel.h"
 #include "mathconst.h"
 
 #if defined(_WIN32)
@@ -1186,6 +1187,7 @@ bool anchorScan(const AnchorSetup& s, const std::vector<const double*>& ys, cons
     std::memcpy(&lo, &inv, 4);
     std::memcpy(&hi, reinterpret_cast<const char*>(&inv) + 4, 4);
     for (std::size_t b = 0; b < anchors; b += perBatch) {
+        if (cancel::requested()) return false;
         const std::size_t cnt = std::min(perBatch, anchors - b);
         const UINT vecs = static_cast<UINT>(cnt * 2);
         x.resize(static_cast<std::size_t>(vecs) * static_cast<std::size_t>(s.len));
