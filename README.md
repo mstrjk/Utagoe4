@@ -11,7 +11,8 @@ Utagoe pulls the vocal out of a song by subtracting the song's instrumental (off
 
 Needs 64-bit Windows 10 or 11. If the free Microsoft .NET Desktop Runtime 10 is missing, Utagoe downloads it and installs it first.
 
-The exe is not code signed, so Windows SmartScreen may show an "unknown publisher" warning. Choose "More info", then "Run anyway".
+
+The 4.1 exe is code signed, Windows SmartScreen should not show an "unknown publisher" warning. The 4.0 exe is not code signed. Choose "More info", then "Run anyway".
 
 Hover over any blue, underlined heading in Settings to see what it does.
 
