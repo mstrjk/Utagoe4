@@ -41,7 +41,7 @@ if (-not $Release) {
 # テストは DLL 版を PowerShell から読み込んで実行する。未署名 exe を止める環境 (Smart App Control など) でも動く。
 # 同梱ライブラリの DLL は utagoe_tests.dll と同じ folder にあるので、その folder から依存先を探すよう読み込む。
 Write-Host 'core: tests'
-Add-Type -TypeDefinition @"
+$testSource = @"
 using System;
 using System.Runtime.InteropServices;
 public static class UtagoeTestRunner {
@@ -61,7 +61,11 @@ public static class UtagoeTestRunner {
 }
 "@
 $log = Join-Path $build 'test.log'
-$failures = [UtagoeTestRunner]::Run((Join-Path $build 'utagoe_tests.dll'), $log)
+$failures = [int](& powershell -NoProfile -ExecutionPolicy Bypass -Command {
+    param($src, $dll, $out)
+    Add-Type -TypeDefinition $src
+    [UtagoeTestRunner]::Run($dll, $out)
+} -args $testSource, (Join-Path $build 'utagoe_tests.dll'), $log | Select-Object -Last 1)
 Get-Content $log -Encoding UTF8 | Select-Object -Last 1
 if ($failures -ne 0) { Get-Content $log -Encoding UTF8 | Select-String 'FAIL'; throw 'core tests failed' }
 
